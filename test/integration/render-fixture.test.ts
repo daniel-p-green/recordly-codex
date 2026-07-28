@@ -1,4 +1,3 @@
-import { createHash } from "node:crypto";
 import { access, readFile, stat } from "node:fs/promises";
 
 import { describe, expect, it } from "vitest";
@@ -7,6 +6,7 @@ import {
   cleanupRenderedFixtureCandidate,
   renderSanitizedFixtureCandidate,
 } from "../../src/render/sanitized-fixture.js";
+import { averagePpmRegion, isRgbWithin, parsePpm, ppmPixelAt } from "../support/ppm.js";
 
 describe("sanitized render fixture", () => {
   it("renders a deterministic browser-style recording that passes its delivery contract", async () => {
@@ -25,20 +25,33 @@ describe("sanitized render fixture", () => {
         hasAudio: false,
       });
 
-      // A sampled decoded frame catches broken filter/overlay changes without relying on MP4 bytes,
-      // whose metadata can vary across FFmpeg builds.
-      const firstFrameHash = createHash("sha256")
-        .update(await readFile(candidate.firstFramePath))
-        .digest("hex");
-      expect(firstFrameHash).toBe(
-        "83b75e6e13e553330be2b1ae21ff18bfe8eec5b4831ba7519e1e503559ea5281",
-      );
-      const clickFrameHash = createHash("sha256")
-        .update(await readFile(candidate.clickFramePath))
-        .digest("hex");
-      expect(clickFrameHash).toBe(
-        "955878e7d732f171e548190786cb0e26da6bea3d38594fa8d33ac0b0b2669902",
-      );
+      const opening = parsePpm(await readFile(candidate.firstFramePath));
+      const click = parsePpm(await readFile(candidate.clickFramePath));
+      expect(opening).toMatchObject({ width: 1920, height: 1080, maxValue: 255 });
+      expect(click).toMatchObject({ width: 1920, height: 1080, maxValue: 255 });
+
+      // These broad regions verify the dark output canvas, browser surface, and action button
+      // after decode without relying on encoder-specific RGB bytes.
+      expect(
+        isRgbWithin(averagePpmRegion(opening, 20, 600, 40, 40), { r: 15, g: 23, b: 42 }, 20),
+      ).toBe(true);
+      expect(
+        isRgbWithin(averagePpmRegion(opening, 400, 650, 40, 40), { r: 248, g: 250, b: 252 }, 20),
+      ).toBe(true);
+      expect(
+        isRgbWithin(averagePpmRegion(opening, 600, 500, 40, 20), { r: 37, g: 99, b: 235 }, 25),
+      ).toBe(true);
+
+      const openingAtClick = ppmPixelAt(opening, 977, 484);
+      const clickTreatment = ppmPixelAt(click, 977, 484);
+      expect(clickTreatment.r).toBeGreaterThan(170);
+      expect(clickTreatment.r - clickTreatment.g).toBeGreaterThan(50);
+      expect(clickTreatment.b).toBeGreaterThan(90);
+      expect(
+        Math.abs(clickTreatment.r - openingAtClick.r) +
+          Math.abs(clickTreatment.g - openingAtClick.g) +
+          Math.abs(clickTreatment.b - openingAtClick.b),
+      ).toBeGreaterThan(100);
     } finally {
       await cleanupRenderedFixtureCandidate(candidate);
     }
