@@ -14,12 +14,22 @@ class FakeCdp implements CdpTransport {
   public readonly commands: Command[] = [];
   public onSend: ((method: string) => void) | undefined;
   public failMethod: string | undefined;
+  public failSecondScreencastStart = false;
+  private screencastStartCount = 0;
   private listener: CdpNotificationListener | undefined;
   public ackDelayUs = 0;
 
   public async send(method: string, params?: Record<string, unknown>): Promise<unknown> {
     this.commands.push(params === undefined ? { method } : { method, params });
     this.onSend?.(method);
+    if (method === "Page.startScreencast") this.screencastStartCount += 1;
+    if (
+      this.failSecondScreencastStart &&
+      method === "Page.startScreencast" &&
+      this.screencastStartCount === 2
+    ) {
+      throw new Error("degraded Page.startScreencast failed");
+    }
     if (method === this.failMethod) throw new Error(`${method} failed`);
     if (method === "Page.screencastFrameAck" && this.ackDelayUs > 0) {
       await new Promise<void>((resolve) => setTimeout(resolve, this.ackDelayUs / 1_000));
@@ -283,6 +293,111 @@ describe("CaptureAdapter", () => {
     });
     release?.();
     await capture.flush();
+  });
+
+  it("uses the caller's custom degraded screencast settings for the pressure transition", async () => {
+    const cdp = new FakeCdp();
+    let release: (() => void) | undefined;
+    let firstWrite = true;
+    const capture = new CaptureAdapter({
+      sessionId: "session-001",
+      transport: cdp,
+      store: {
+        enqueue: async () => {
+          if (firstWrite) {
+            firstWrite = false;
+            await new Promise<void>((resolve) => {
+              release = resolve;
+            });
+          }
+          return {
+            imagePath: "frames/raw/000001.webp",
+            sha256: "a".repeat(64),
+            width: 1440,
+            height: 900,
+          };
+        },
+        flush: async () => undefined,
+      },
+      clockUs: () => 0,
+      telemetry: { emit: () => undefined },
+      degradedScreencast: { format: "jpeg", quality: 42, maxWidth: 640, maxHeight: 360 },
+    });
+
+    await capture.start();
+    for (let frameId = 1; frameId <= 98; frameId += 1)
+      cdp.notify("Page.screencastFrame", frame(frameId));
+
+    const starts = cdp.commands.filter((command) => command.method === "Page.startScreencast");
+    expect(starts).toHaveLength(2);
+    expect(starts[1]).toEqual({
+      method: "Page.startScreencast",
+      params: { format: "jpeg", quality: 42, maxWidth: 640, maxHeight: 360 },
+    });
+    expect(capture.health()).toMatchObject({ status: "running", degradationRequested: true });
+
+    release?.();
+    await capture.flush();
+  });
+
+  it("fails closed when the degraded screencast transition is rejected without losing accepted frames", async () => {
+    const cdp = new FakeCdp();
+    cdp.failSecondScreencastStart = true;
+    let release: (() => void) | undefined;
+    let firstWrite = true;
+    const storedFrameIds: number[] = [];
+    const capture = new CaptureAdapter({
+      sessionId: "session-001",
+      transport: cdp,
+      store: {
+        enqueue: async (capturedFrame) => {
+          if (firstWrite) {
+            firstWrite = false;
+            await new Promise<void>((resolve) => {
+              release = resolve;
+            });
+          }
+          storedFrameIds.push(capturedFrame.cdpFrameId);
+          return {
+            imagePath: `frames/raw/${String(capturedFrame.cdpFrameId).padStart(6, "0")}.webp`,
+            sha256: "a".repeat(64),
+            width: 1440,
+            height: 900,
+          };
+        },
+        flush: async () => undefined,
+      },
+      clockUs: () => 0,
+      telemetry: { emit: () => undefined },
+      degradedScreencast: { format: "jpeg", quality: 42, maxWidth: 640, maxHeight: 360 },
+    });
+
+    await capture.start();
+    for (let frameId = 1; frameId <= 98; frameId += 1)
+      cdp.notify("Page.screencastFrame", frame(frameId));
+    await Promise.resolve();
+
+    expect(capture.health()).toMatchObject({
+      status: "failed",
+      reason: "capture_backpressure",
+      receivedFrames: 98,
+      acceptedFrames: 98,
+      rejectedFrames: 0,
+      degradationRequested: true,
+    });
+    expect(cdp.commands.map((command) => command.method)).toEqual([
+      "Page.startScreencast",
+      "Page.startScreencast",
+      "Page.stopScreencast",
+    ]);
+
+    release?.();
+    await capture.flush();
+
+    expect(storedFrameIds).toHaveLength(98);
+    expect(
+      cdp.commands.filter((command) => command.method === "Page.screencastFrameAck"),
+    ).toHaveLength(98);
   });
 
   it("fails closed when an ACK exceeds 500ms and stop flushes accepted frames before ending the lifecycle", async () => {
