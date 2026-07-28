@@ -38,4 +38,12 @@
 - Decision: Implement and test the request schema, event stream, capture-frame representation, coordinate mapping, frame-grid normalization, and zoom selection before capture or render modules.
 - Alternatives considered: Start with direct browser capture; add an editor UI first; use prompt-only recording plans.
 - Reason: These contracts make later capture and rendering inputs bounded, testable, and auditable without claiming that media output exists.
-- Consequence or follow-up: The current 15-test core is not a rendering fixture. Add a sanitized fixture, manifest/shot-plan/quality-report schemas, and an end-to-end test before claiming vertical-slice recording support.
+- Consequence or follow-up: This sequence produced the tested local render fixture and loopback E2E proof. Standalone shot-plan and quality-report contracts, the Codex Browser control bridge, and a real approved-site demonstration remain before broader recording claims.
+
+## D-006 — CI loopback fixture uses system Chrome, not the Codex Browser runtime
+
+- Context: The capture-render tranche needs repeatable browser evidence in CI before a Codex Desktop Browser control bridge exists.
+- Decision: Use Playwright Core with a supported system Chrome to drive a local loopback-only fixture. Block every non-loopback request and encode the captured opening, action, and result states into the deterministic fixture candidate.
+- Alternatives considered: Claim the fixture proves Codex Browser support; defer all browser verification until the MCP/control bridge exists; allow normal external browsing in CI.
+- Reason: The loopback fixture supplies reproducible browser, capture, manifest, encode, and decode evidence without conflating CI browser automation with Codex Desktop Browser control or exposing an external site.
+- Consequence or follow-up: Keep the fixture as CI-only proof. Do not describe it as the runtime interaction surface. Build and verify the Codex Browser-to-local-engine bridge and a real approved-site demo before claiming autonomous recording.
