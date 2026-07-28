@@ -32,6 +32,15 @@ jobs:
           cache: npm
           cache-dependency-path: package-lock.json
 
+      - name: Provision FFmpeg and FFprobe
+        run: |
+          sudo apt-get update
+          sudo apt-get install --yes --no-install-recommends ffmpeg
+          test -x /usr/bin/ffmpeg
+          test -x /usr/bin/ffprobe
+          /usr/bin/ffmpeg -version
+          /usr/bin/ffprobe -version
+
       - name: Install exact dependencies
         run: npm ci
 
@@ -65,6 +74,15 @@ jobs:
           node-version: 24.x
           cache: npm
           cache-dependency-path: package-lock.json
+
+      - name: Provision FFmpeg and FFprobe
+        run: |
+          sudo apt-get update
+          sudo apt-get install --yes --no-install-recommends ffmpeg
+          test -x /usr/bin/ffmpeg
+          test -x /usr/bin/ffprobe
+          /usr/bin/ffmpeg -version
+          /usr/bin/ffprobe -version
 
       - name: Install exact dependencies
         run: npm ci
