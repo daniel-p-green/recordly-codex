@@ -1,0 +1,28 @@
+{
+  "name": "recordly-codex",
+  "version": "0.1.0",
+  "description": "Codex guidance for planning and producing deterministic browser site recordings.",
+  "author": {
+    "name": "Daniel P. Green",
+    "url": "https://github.com/daniel-p-green"
+  },
+  "homepage": "https://github.com/daniel-p-green/recordly-codex",
+  "repository": "https://github.com/daniel-p-green/recordly-codex",
+  "license": "Apache-2.0",
+  "keywords": ["codex", "browser", "recording", "site-demo", "video"],
+  "skills": "./skills/",
+  "interface": {
+    "displayName": "Recordly Codex",
+    "shortDescription": "Plan deterministic browser site recordings.",
+    "longDescription": "Guides Codex through approved browser-based recording plans, deterministic manifests, and quality gates.",
+    "developerName": "Daniel P. Green",
+    "category": "Productivity",
+    "capabilities": ["Browser-guided planning", "Recording manifests", "Quality-gated workflows"],
+    "defaultPrompt": [
+      "Use Recordly Codex to plan a recording for this approved URL.",
+      "Create a deterministic browser demo plan for this site workflow.",
+      "Review this recording manifest for safe, repeatable capture."
+    ],
+    "brandColor": "#0F766E"
+  }
+}

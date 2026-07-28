@@ -1,0 +1,23 @@
+.DS_Store
+**/.DS_Store
+
+# Dependencies and package-manager state
+node_modules/
+.pnpm-store/
+
+# Build, coverage, and release artifacts
+coverage/
+dist/
+*.tsbuildinfo
+
+# Local recording artifacts. Keep source fixtures intentionally added under test/.
+recordings/
+artifacts/
+tmp/
+
+# Local environment and editor state
+.env
+.env.*
+!.env.example
+.idea/
+.vscode/

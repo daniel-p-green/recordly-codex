@@ -1,0 +1,89 @@
+name: CI
+
+on:
+  push:
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  quality:
+    name: Quality (Node ${{ matrix.node }})
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    strategy:
+      fail-fast: false
+      matrix:
+        node: [22.x, 24.x]
+    steps:
+      - name: Check out source
+        uses: actions/checkout@v5
+
+      - name: Set up Node
+        uses: actions/setup-node@v5
+        with:
+          node-version: ${{ matrix.node }}
+          cache: npm
+          cache-dependency-path: package-lock.json
+
+      - name: Install exact dependencies
+        run: npm ci
+
+      - name: Run quality and coverage gate
+        run: bash scripts/ci/run-quality.sh
+
+      - name: Upload failure diagnostics
+        if: ${{ failure() }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: quality-diagnostics-node-${{ matrix.node }}
+          path: |
+            coverage/
+            test-results/
+            playwright-report/
+            artifacts/ci/
+          if-no-files-found: warn
+          retention-days: 7
+
+  plugin-contract:
+    name: Plugin and fixture contract
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - name: Check out source
+        uses: actions/checkout@v5
+
+      - name: Set up current Node LTS
+        uses: actions/setup-node@v5
+        with:
+          node-version: 24.x
+          cache: npm
+          cache-dependency-path: package-lock.json
+
+      - name: Install exact dependencies
+        run: npm ci
+
+      - name: Validate plugin package
+        run: bash scripts/ci/run-plugin-validation.sh
+
+      - name: Validate render fixtures
+        run: bash scripts/ci/run-fixture-validation.sh
+
+      - name: Upload failure diagnostics
+        if: ${{ failure() }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: plugin-diagnostics
+          path: |
+            coverage/
+            test-results/
+            playwright-report/
+            artifacts/ci/
+          if-no-files-found: warn
+          retention-days: 7

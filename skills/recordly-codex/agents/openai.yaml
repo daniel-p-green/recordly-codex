@@ -1,0 +1,6 @@
+interface:
+  display_name: "Recordly Codex"
+  short_description: "Plan browser recordings with quality gates"
+  default_prompt: "Use $recordly-codex to plan a recording for this approved website."
+policy:
+  allow_implicit_invocation: true

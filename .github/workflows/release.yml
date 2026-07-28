@@ -1,0 +1,53 @@
+name: Release plugin source archive
+
+on:
+  push:
+    tags:
+      - "v*"
+
+permissions:
+  contents: write
+
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  release:
+    name: Validate and publish source archive
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: Check out source
+        uses: actions/checkout@v5
+
+      - name: Set up Node
+        uses: actions/setup-node@v5
+        with:
+          node-version: 24.x
+          cache: npm
+          cache-dependency-path: package-lock.json
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Validate the release candidate
+        run: >-
+          bash scripts/ci/run-quality.sh &&
+          bash scripts/ci/run-plugin-validation.sh &&
+          bash scripts/ci/run-fixture-validation.sh
+
+      - name: Build source archive
+        run: >-
+          git archive --format=tar.gz
+          --prefix=recordly-codex-${{ github.ref_name }}/
+          --output=recordly-codex-${{ github.ref_name }}.tar.gz
+          ${{ github.sha }}
+
+      - name: Create GitHub release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: >-
+          gh release create "${{ github.ref_name }}"
+          "recordly-codex-${{ github.ref_name }}.tar.gz"
+          --generate-notes
