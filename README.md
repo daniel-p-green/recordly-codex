@@ -6,9 +6,18 @@ The first supported environment is Codex Desktop Browser. A recording may run un
 
 ## Status
 
-The public repository is at [github.com/daniel-p-green/recordly-codex](https://github.com/daniel-p-green/recordly-codex). The Codex plugin manifest validates, and the TypeScript contract core now covers recording requests, session events, capture-frame representation, coordinate mapping, frame-grid normalization, and deterministic zoom selection.
+The repository is public at [github.com/daniel-p-green/recordly-codex](https://github.com/daniel-p-green/recordly-codex), protected from direct changes, and its initial CI run is green. The plugin manifest validates. A clean `npm ci` completes with zero reported audit vulnerabilities.
 
-The current unit suite has 15 passing tests with 97.69% statement coverage and 91.89% branch coverage. Fixture validation remains a placeholder because no render fixture exists yet. Capture, rendering, and export modules are intentionally not implemented, so this is not a drop-in replacement for the Recordly desktop app.
+The completed local capture-render tranche includes:
+
+- A bounded CDP screencast capture adapter with durable-frame acknowledgement and capture-health telemetry.
+- A compiler that verifies immutable frame hashes, emits a canonical sanitized manifest, builds a deterministic constant-frame-rate timeline, and classifies QA preconditions.
+- A deterministic renderer and encoder fixture that produces a valid 1920x1080, 30 fps, 30-frame silent H.264 MP4.
+- A system-Chrome, loopback-only E2E fixture that records opening, action, and result states while blocking external requests, then verifies the manifest, telemetry, decoded media, and a sampled output frame.
+
+The suite has 34 passing tests. Before the final CI coverage-threshold configuration, its coverage report was 93.92% lines and 85.74% branches. The fixture is deliberately a local proof harness, not a user-facing browser-control integration.
+
+This is still not a drop-in autonomous recorder. The runtime does not yet include a Codex Desktop Browser-to-local-engine MCP/control bridge, and it has not yet recorded a real approved public-site workflow. Those two proofs remain required before claiming that Codex can autonomously create a real site recording.
 
 ## Product contract
 
@@ -21,19 +30,19 @@ approved URL + objective
   -> media file + manifest
 ```
 
-The manifest is the durable handoff between planning, capture, rendering, and QA. It must never contain secrets, cookies, or raw frame streams.
+The canonical manifest and its frame hashes are the durable handoff between planning, capture, rendering, and QA. They must never contain secrets, cookies, query values, or raw frame streams.
 
 ## Development
 
 Requirements: Node.js 22.17+ and npm 11+.
 
 ```bash
-npm install
+npm ci
 npm run check
 npm run plugin:validate
 ```
 
-Use red-green-refactor for executable behavior. Add a failing test before implementing a new capture, rendering, browser-control, or QA rule.
+Use red-green-refactor for executable behavior. Add a failing test before implementing a new capture, rendering, browser-control, or QA rule. The local E2E fixture needs a supported system Chrome plus FFmpeg and FFprobe; it does not use the Codex Browser surface.
 
 ## CI and releases
 

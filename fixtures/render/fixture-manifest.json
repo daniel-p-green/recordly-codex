@@ -1,0 +1,15 @@
+{
+  "id": "sanitized-browser-workflow-v1",
+  "description": "A procedural browser-like source frame used only for deterministic rendering tests.",
+  "externalAssets": false,
+  "viewport": {
+    "width": 1440,
+    "height": 810
+  },
+  "output": {
+    "width": 1920,
+    "height": 1080,
+    "fps": 30,
+    "frameCount": 30
+  }
+}
