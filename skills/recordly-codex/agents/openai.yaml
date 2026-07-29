@@ -1,6 +1,6 @@
 interface:
   display_name: "Recordly Codex"
-  short_description: "Capture and edit approved browser recordings"
-  default_prompt: "Use $recordly-codex to capture this approved website flow with broker-timed evidence, then create a versioned editable project and render a quality-checked preview."
+  short_description: "Finish approved browser recordings with evidence"
+  default_prompt: "Use $recordly-codex to capture this approved website flow with broker-timed evidence, create a versioned project, inspect and judge the preview, then render final."
 policy:
   allow_implicit_invocation: true

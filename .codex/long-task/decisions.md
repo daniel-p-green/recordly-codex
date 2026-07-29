@@ -76,3 +76,17 @@
 - Decision: Copy capture frames, PiP, and audio from one opened and bounded regular file into exclusive private snapshots while hashing the exact bytes copied. Make composition and FFmpeg consume only those snapshots, publish through an exclusive contained staging file, and clean staging on success or failure.
 - Reason: This preserves the digest/type/size contract through actual media consumption.
 - Consequence: Render operations require temporary private disk space proportional to selected bounded inputs; source pathnames are never treated as verified media after hashing.
+
+## D-011 — Near-output parity is an executable decoded-output contract
+
+- Context: Accepting project fields or validating a fixture manifest does not prove that a professional recording contains the declared effects at the right times.
+- Decision: Gate v0.5.0 on clean-room fixtures that run through the production renderer and are probed and decoded at declared checkpoints for every supported output profile and format.
+- Reason: This tests the user-visible artifact while avoiding Recordly source, assets, project formats, or pixel-identity claims.
+- Consequence: A fixture or feature remains unproven until its decoded geometry, timing, and behavioral assertions pass. Declarative coverage is supporting evidence only.
+
+## D-012 — Model judgment may direct revisions; deterministic code owns evidence and publication
+
+- Context: The requested workflow should complete without routine human editing, but model-only media mutation would make timing, provenance, and completion claims difficult to audit.
+- Decision: Let Codex plan, inspect previews, record bounded structured judgments, and request limited revisions. Keep capture evidence, media normalization, composition, encoding, digest checks, and publication in versioned tested code.
+- Reason: This gives the agent useful editorial autonomy without making its prose or tool success the only record of what happened.
+- Consequence: Final publication requires the exact current accepted preview judgment and exhausted safety checks. Credentials, CAPTCHA, consent, payments, sensitive uploads, irreversible actions, and unsupported Browser capabilities still stop for direction.

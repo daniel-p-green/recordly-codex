@@ -1,10 +1,10 @@
-import { spawn } from "node:child_process";
 import { createHash } from "node:crypto";
 import { constants } from "node:fs";
 import { lstat, mkdir, open, realpath, unlink } from "node:fs/promises";
 import { dirname, relative, resolve } from "node:path";
 
 import { resolveMediaExecutable } from "./ffmpeg.js";
+import { MEDIA_PROCESS_POLICY, runMediaProcess } from "./media-process.js";
 
 const MAX_FRAME_BYTES = 8 * 1024 * 1024;
 const MAX_AUDIO_SOURCE_TIME_US = 24 * 60 * 60 * 1_000_000;
@@ -25,7 +25,52 @@ export type PresentationAudioTrack = {
   startUs: number;
   trim: { startUs: number; endUs: number };
   gainDb: number;
+  id?: string;
+  role?: "primary" | "bed" | "effect";
+  pan?: number;
+  fadeInUs?: number;
+  fadeOutUs?: number;
+  ducking?: "none" | "against-primary";
 };
+
+export const PRESENTATION_DUCKING = {
+  threshold: 0.125,
+  ratio: 8,
+  attackMs: 20,
+  releaseMs: 250,
+} as const;
+const PRESENTATION_LIMITER_CEILING = 0.6;
+
+/** V1 recipe contract: retain this exact gain/delay/amix graph for legacy projects. */
+export function compileLegacyPresentationAudioFilter(
+  tracks: readonly Pick<PresentationAudioTrack, "gainDb" | "startUs">[],
+): string {
+  const filters = tracks.map(
+    (track, index) =>
+      `[${index + 1}:a]asetpts=PTS-STARTPTS,volume=${track.gainDb}dB,adelay=${Math.round(track.startUs / 1000)}:all=1[a${index}]`,
+  );
+  const inputs = tracks.map((_track, index) => `[a${index}]`).join("");
+  return `${filters.join(";")};${inputs}amix=inputs=${tracks.length}:normalize=0[a]`;
+}
+
+function audioSeconds(valueUs: number): string {
+  return (valueUs / 1_000_000).toFixed(6);
+}
+
+function equalPowerPan(pan: number): { left: string; right: string } {
+  const angle = ((pan + 1) * Math.PI) / 4;
+  return { left: Math.cos(angle).toFixed(6), right: Math.sin(angle).toFixed(6) };
+}
+
+function usesProfessionalMix(track: PresentationAudioTrack): boolean {
+  return (
+    track.role !== undefined ||
+    track.pan !== undefined ||
+    track.fadeInUs !== undefined ||
+    track.fadeOutUs !== undefined ||
+    track.ducking !== undefined
+  );
+}
 
 export function assertAudioTracksBounded(
   tracks: readonly PresentationAudioTrack[],
@@ -47,6 +92,106 @@ export function assertAudioTracksBounded(
       throw new RangeError("presentation audio timing is invalid");
     }
   }
+  const professional = tracks.some(usesProfessionalMix);
+  if (!professional) return;
+  for (const track of tracks) {
+    if (
+      track.role === undefined ||
+      track.pan === undefined ||
+      track.fadeInUs === undefined ||
+      track.fadeOutUs === undefined ||
+      track.ducking === undefined ||
+      !Number.isFinite(track.pan) ||
+      track.pan < -1 ||
+      track.pan > 1 ||
+      !Number.isSafeInteger(track.fadeInUs) ||
+      !Number.isSafeInteger(track.fadeOutUs) ||
+      track.fadeInUs < 0 ||
+      track.fadeOutUs < 0 ||
+      track.fadeInUs + track.fadeOutUs > track.trim.endUs - track.trim.startUs
+    ) {
+      throw new RangeError("presentation professional audio mix is invalid");
+    }
+  }
+  if (
+    tracks.some((track) => track.ducking === "against-primary") &&
+    !tracks.some((track) => track.role === "primary")
+  ) {
+    throw new RangeError("presentation ducking requires a primary track");
+  }
+}
+
+/** Compiles the V2 deterministic audio mix without interpolating source paths into FFmpeg syntax. */
+export function compileProfessionalAudioFilter(tracks: readonly PresentationAudioTrack[]): string {
+  assertAudioTracksBounded(tracks, Number.MAX_SAFE_INTEGER);
+  if (tracks.length === 0 || !tracks.every(usesProfessionalMix)) {
+    throw new RangeError("presentation professional audio mix requires complete track controls");
+  }
+  const ducked = tracks.some((track) => track.ducking === "against-primary");
+  const primaryIndexes = tracks.flatMap((track, index) =>
+    track.role === "primary" ? [index] : [],
+  );
+  if (ducked && primaryIndexes.length === 0)
+    throw new RangeError("presentation ducking requires a primary track");
+
+  const filters: string[] = [];
+  const outputLabels: string[] = [];
+  for (const [index, track] of tracks.entries()) {
+    const pan = equalPowerPan(track.pan as number);
+    const trimDurationUs = track.trim.endUs - track.trim.startUs;
+    const transforms = [
+      "asetpts=PTS-STARTPTS",
+      "aformat=sample_rates=48000:channel_layouts=stereo",
+      `volume=${track.gainDb}dB`,
+      `pan=stereo|c0=${pan.left}*c0|c1=${pan.right}*c1`,
+    ];
+    if ((track.fadeInUs as number) > 0)
+      transforms.push(`afade=t=in:st=0:d=${audioSeconds(track.fadeInUs as number)}`);
+    if ((track.fadeOutUs as number) > 0) {
+      transforms.push(
+        `afade=t=out:st=${audioSeconds(trimDurationUs - (track.fadeOutUs as number))}:d=${audioSeconds(track.fadeOutUs as number)}`,
+      );
+    }
+    transforms.push(
+      `adelay=${Math.round(track.startUs / 1000)}:all=1`,
+      `apad=whole_dur=${audioSeconds(track.startUs + trimDurationUs)}`,
+      "asetnsamples=n=1024:p=1",
+    );
+    if (ducked && track.role === "primary") {
+      filters.push(`[${index + 1}:a]${transforms.join(",")},asplit=2[p${index}mix][p${index}out]`);
+      outputLabels.push(`[p${index}out]`);
+    } else {
+      filters.push(`[${index + 1}:a]${transforms.join(",")}[t${index}]`);
+      outputLabels.push(track.ducking === "against-primary" ? `[d${index}]` : `[t${index}]`);
+    }
+  }
+  if (ducked) {
+    const primaryInputs = primaryIndexes.map((index) => `[p${index}mix]`).join("");
+    filters.push(
+      primaryIndexes.length === 1
+        ? `${primaryInputs}anull[primary]`
+        : `${primaryInputs}amix=inputs=${primaryIndexes.length}:normalize=0[primary]`,
+    );
+    const duckedIndexes = tracks.flatMap((track, index) =>
+      track.ducking === "against-primary" ? [index] : [],
+    );
+    filters.push(
+      `[primary]asplit=${duckedIndexes.length}${duckedIndexes.map((index) => `[side${index}]`).join("")}`,
+    );
+    for (const index of duckedIndexes) {
+      const track = tracks[index];
+      if (track === undefined) throw new Error("professional audio track is unavailable");
+      if (track.ducking === "against-primary") {
+        filters.push(
+          `[t${index}][side${index}]sidechaincompress=threshold=${PRESENTATION_DUCKING.threshold}:ratio=${PRESENTATION_DUCKING.ratio}:attack=${PRESENTATION_DUCKING.attackMs}:release=${PRESENTATION_DUCKING.releaseMs}[d${index}]`,
+        );
+      }
+    }
+  }
+  filters.push(
+    `${outputLabels.join("")}amix=inputs=${tracks.length}:normalize=0,alimiter=limit=${PRESENTATION_LIMITER_CEILING}:level=disabled:latency=enabled,aformat=sample_rates=48000:channel_layouts=stereo:sample_fmts=fltp[a]`,
+  );
+  return filters.join(";");
 }
 
 function waitForDrain(stream: NodeJS.WritableStream): Promise<void> {
@@ -178,6 +323,9 @@ export async function encodePresentationFrames(input: {
   durationUs: number;
   outputPath: string;
   audioTracks?: readonly PresentationAudioTrack[];
+  /** V2-only explicit export choices. Omitted preserves the legacy V1 recipe. */
+  colorRange?: "limited";
+  metadata?: "none" | "minimal";
 }): Promise<void> {
   if (
     !Number.isSafeInteger(input.width) ||
@@ -199,6 +347,10 @@ export async function encodePresentationFrames(input: {
   const quality = encodingQualityProfile(input.quality);
   const maximumFrames = Math.ceil((input.durationUs * input.fps) / 1_000_000);
   const audioTracks = input.audioTracks ?? [];
+  if (input.colorRange !== undefined && input.colorRange !== "limited")
+    throw new RangeError("presentation color range must be limited");
+  if (input.metadata !== undefined && input.metadata !== "none" && input.metadata !== "minimal")
+    throw new RangeError("presentation metadata mode is invalid");
   assertAudioTracksBounded(audioTracks, input.durationUs);
   if (input.format === "gif" && audioTracks.length > 0)
     throw new RangeError("GIF delivery cannot represent project audio");
@@ -222,35 +374,51 @@ export async function encodePresentationFrames(input: {
   for (const track of audioTracks) {
     args.push(
       "-ss",
-      (track.trim.startUs / 1_000_000).toFixed(6),
+      audioSeconds(track.trim.startUs),
       "-t",
-      ((track.trim.endUs - track.trim.startUs) / 1_000_000).toFixed(6),
+      audioSeconds(track.trim.endUs - track.trim.startUs),
       "-i",
       track.path,
     );
   }
+  const metadataArgs =
+    input.metadata === undefined
+      ? []
+      : [
+          "-map_metadata",
+          "-1",
+          ...(input.metadata === "minimal"
+            ? ["-metadata", "title=Recordly recording", "-metadata", "comment=Generated locally"]
+            : []),
+        ];
   if (input.format === "mp4") {
+    const professionalAudio = audioTracks.some(usesProfessionalMix);
     const audioFilter =
       audioTracks.length === 0
         ? []
-        : (() => {
-            const filters = audioTracks.map(
-              (track, index) =>
-                `[${index + 1}:a]asetpts=PTS-STARTPTS,volume=${track.gainDb}dB,adelay=${Math.round(track.startUs / 1000)}:all=1[a${index}]`,
-            );
-            const inputs = audioTracks.map((_track, index) => `[a${index}]`).join("");
-            return [
+        : professionalAudio
+          ? [
               "-filter_complex",
-              `${filters.join(";")};${inputs}amix=inputs=${audioTracks.length}:normalize=0[a]`,
+              compileProfessionalAudioFilter(audioTracks),
               "-map",
               "0:v:0",
               "-map",
               "[a]",
-            ];
-          })();
+            ]
+          : (() => {
+              return [
+                "-filter_complex",
+                compileLegacyPresentationAudioFilter(audioTracks),
+                "-map",
+                "0:v:0",
+                "-map",
+                "[a]",
+              ];
+            })();
     args.push(
       ...audioFilter,
       ...(audioTracks.length === 0 ? ["-an"] : []),
+      ...(professionalAudio ? ["-c:a", "aac", "-ar", "48000", "-ac", "2"] : []),
       "-vf",
       "format=yuv420p,setrange=limited",
       "-c:v",
@@ -267,6 +435,7 @@ export async function encodePresentationFrames(input: {
       "h264_metadata=video_full_range_flag=0",
       "-movflags",
       "+faststart",
+      ...metadataArgs,
       "-t",
       (input.durationUs / 1_000_000).toFixed(6),
       "-y",
@@ -278,42 +447,30 @@ export async function encodePresentationFrames(input: {
       `[0:v]fps=${input.fps},split[a][b];[a]palettegen=max_colors=${quality.gifColors}:stats_mode=diff[p];[b][p]paletteuse=dither=sierra2_4a`,
       "-loop",
       "0",
+      ...metadataArgs,
       "-t",
       (input.durationUs / 1_000_000).toFixed(6),
       "-y",
       input.outputPath,
     );
   }
-  const child = spawn(ffmpeg, args, { stdio: ["pipe", "ignore", "pipe"] });
-  let stderr = "";
-  child.stderr.setEncoding("utf8");
-  child.stderr.on("data", (chunk: string) => {
-    stderr += chunk;
-  });
-  const finished = new Promise<void>((resolve, reject) => {
-    child.once("error", reject);
-    child.once("close", (code) => {
-      if (code === 0) resolve();
-      else reject(new Error(`presentation encoder exited with code ${code}: ${stderr.trim()}`));
-    });
-  });
   let frameCount = 0;
-  try {
-    for await (const frame of input.frames) {
-      if (frame.length !== frameBytes)
-        throw new RangeError("presentation frames must be packed RGB24 buffers");
-      if (frameCount >= maximumFrames)
-        throw new RangeError("presentation frame stream exceeds assembled duration");
-      if (!child.stdin.write(frame)) await waitForDrain(child.stdin);
-      frameCount += 1;
-    }
-    if (frameCount === 0) throw new RangeError("presentation encoder requires at least one frame");
-    child.stdin.end();
-    await finished;
-  } catch (error) {
-    child.stdin.destroy();
-    child.kill("SIGTERM");
-    await finished.catch(() => undefined);
-    throw error;
-  }
+  await runMediaProcess({
+    executable: ffmpeg,
+    args,
+    label: "presentation encoder",
+    timeoutMs: MEDIA_PROCESS_POLICY.presentationEncodeDeadlineMs,
+    writeInput: async (stdin) => {
+      for await (const frame of input.frames) {
+        if (frame.length !== frameBytes)
+          throw new RangeError("presentation frames must be packed RGB24 buffers");
+        if (frameCount >= maximumFrames)
+          throw new RangeError("presentation frame stream exceeds assembled duration");
+        if (!stdin.write(frame)) await waitForDrain(stdin);
+        frameCount += 1;
+      }
+      if (frameCount === 0)
+        throw new RangeError("presentation encoder requires at least one frame");
+    },
+  });
 }

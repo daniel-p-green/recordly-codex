@@ -1,10 +1,22 @@
-import { mkdir, mkdtemp, rm, symlink, writeFile } from "node:fs/promises";
+import {
+  access,
+  mkdir,
+  mkdtemp,
+  readFile,
+  readdir,
+  rm,
+  symlink,
+  writeFile,
+} from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
 import { afterEach, describe, expect, it } from "vitest";
 
-import { loadProjectAssetRegistry } from "../../mcp/project-asset-registry.js";
+import {
+  loadProjectAssetRegistry,
+  registerProjectAudioAsset,
+} from "../../mcp/project-asset-registry.js";
 import { validateRecordingProject } from "../../src/project/index.js";
 
 const roots: string[] = [];
@@ -109,11 +121,114 @@ async function registry(rootPath: string, entries: unknown, token = owner) {
   });
   return path;
 }
+async function journalEntries(rootPath: string) {
+  const directory = join(rootPath, "projects", "assets.assets.d");
+  const files = (await readdir(directory)).filter((name) => name.endsWith(".json")).sort();
+  return Promise.all(
+    files.map(async (name) => {
+      const value = JSON.parse(await readFile(join(directory, name), "utf8")) as {
+        entry: { assetId: string; sha256: string; relativePath: string };
+      };
+      return value.entry;
+    }),
+  );
+}
 afterEach(async () => {
   await Promise.all(roots.splice(0).map((value) => rm(value, { recursive: true, force: true })));
 });
 
 describe("project asset registry", () => {
+  it("does not let a crashed writer's stale lock artifact brick future registrations", async () => {
+    const value = await root();
+    await writeFile(
+      join(value, "projects", "assets.assets.json.lock"),
+      JSON.stringify({ token: "crashed-writer" }),
+      { mode: 0o600 },
+    );
+    await mkdir(join(value, "projects", "assets.assets.d"), { mode: 0o700 });
+    await writeFile(
+      join(value, "projects", "assets.assets.d", ".audio-crashed.partial.tmp"),
+      '{"incomplete":',
+      { mode: 0o600 },
+    );
+    await registerProjectAudioAsset({
+      artifactRoot: value,
+      ownerToken: owner,
+      projectId: "assets",
+      assetId: "audio-1",
+      sha256: sha,
+      relativePath: "audio-1.wav",
+    });
+    const base = project();
+    const audioOnly = validateRecordingProject({
+      ...base,
+      audioTracks: [
+        {
+          id: "audio",
+          asset: { assetId: "audio-1", sha256: sha },
+          timeDomain: "project-output-relative",
+          startUs: 0,
+          trim: { startUs: 0, endUs: 1_000_000 },
+          gainDb: 0,
+        },
+      ],
+    });
+
+    await expect(
+      loadProjectAssetRegistry({ artifactRoot: value, ownerToken: owner, project: audioOnly }),
+    ).resolves.toMatchObject({ assets: { "audio-1": "audio-1.wav" } });
+    expect(
+      JSON.parse(await readFile(join(value, "projects", "assets.assets.json.lock"), "utf8")),
+    ).toEqual({ token: "crashed-writer" });
+  });
+
+  it("preserves every registration forced to race on one project", async () => {
+    const value = await root();
+    const registrations = Array.from({ length: 16 }, (_unused, index) => ({
+      artifactRoot: value,
+      ownerToken: owner,
+      projectId: "assets",
+      assetId: `audio-${index}`,
+      sha256: index.toString(16).padStart(64, "0"),
+      relativePath: `audio-${index}.wav`,
+    }));
+
+    await Promise.all(registrations.map((input) => registerProjectAudioAsset(input)));
+
+    const stored = await journalEntries(value);
+    expect(stored.map((entry) => entry.assetId).sort()).toEqual(
+      registrations.map((entry) => entry.assetId).sort(),
+    );
+    await expect(access(join(value, "projects", "assets.assets.json.lock"))).rejects.toMatchObject({
+      code: "ENOENT",
+    });
+  });
+
+  it("registers normalized audio idempotently and rejects conflicts, wrong owners, and tampered entries", async () => {
+    const value = await root();
+    const input = {
+      artifactRoot: value,
+      ownerToken: owner,
+      projectId: "assets",
+      assetId: "audio-1",
+      sha256: sha,
+      relativePath: "audio-1.wav",
+    };
+    await registerProjectAudioAsset(input);
+    await registerProjectAudioAsset(input);
+    expect(await journalEntries(value)).toEqual([
+      { assetId: "audio-1", sha256: sha, relativePath: "audio-1.wav" },
+    ]);
+    await expect(registerProjectAudioAsset({ ...input, sha256: "b".repeat(64) })).rejects.toThrow(
+      /conflicts/i,
+    );
+    await expect(
+      registerProjectAudioAsset({ ...input, ownerToken: "wrong-owner" }),
+    ).rejects.toThrow(/owned/i);
+    await registry(value, [{ assetId: "audio-1", sha256: sha, relativePath: "../escape.wav" }]);
+    await expect(registerProjectAudioAsset(input)).rejects.toThrow(/invalid/i);
+  });
+
   it("returns empty assets without requiring a registry", async () => {
     const value = await root();
     await expect(

@@ -14,7 +14,16 @@ import {
 } from "../../src/encoder/ffmpeg.js";
 import { encodePresentationFrames } from "../../src/encoder/presentation.js";
 import { extractFixtureSampleFrames, probeRenderedVideo } from "../../src/encoder/probe.js";
-import { buildCompositionPlan } from "../../src/render/composition.js";
+import {
+  migrateV1RecordingProject,
+  toProjectRenderInput,
+  validateRecordingProject,
+} from "../../src/project/index.js";
+import {
+  buildCompositionPlan,
+  buildCompositionPlanFromProject,
+  type VisualTrack,
+} from "../../src/render/composition.js";
 import { renderRecordingProject } from "../../src/render/project-renderer.js";
 import {
   composePresentationFrames,
@@ -41,6 +50,38 @@ function sourceFrame(color: { r: number; g: number; b: number }): Buffer {
       }
     }
   }
+  return pixels;
+}
+
+function flatSourceFrame(color: { r: number; g: number; b: number }): Buffer {
+  const pixels = Buffer.alloc(160 * 90 * 3);
+  for (let offset = 0; offset < pixels.length; offset += 3) {
+    pixels[offset] = color.r;
+    pixels[offset + 1] = color.g;
+    pixels[offset + 2] = color.b;
+  }
+  return pixels;
+}
+
+function solidRaster(
+  width: number,
+  height: number,
+  color: { r: number; g: number; b: number },
+): Buffer {
+  const pixels = Buffer.alloc(width * height * 3);
+  for (let offset = 0; offset < pixels.length; offset += 3)
+    pixels.set([color.r, color.g, color.b], offset);
+  return pixels;
+}
+
+function splitSourceFrame(): Buffer {
+  const pixels = Buffer.alloc(160 * 90 * 3);
+  for (let y = 0; y < 90; y += 1)
+    for (let x = 0; x < 160; x += 1) {
+      const offset = (y * 160 + x) * 3;
+      if (x < 80) pixels.set([240, 20, 20], offset);
+      else pixels.set([20, 20, 240], offset);
+    }
   return pixels;
 }
 
@@ -142,6 +183,68 @@ afterEach(async () => {
 });
 
 describe("presentation compositor", () => {
+  it("renders every V2 cursor and frame control while leaving the V1 plan recipe unchanged", async () => {
+    const base = {
+      schemaVersion: 1 as const,
+      preset: "minimal",
+      source: { width: 160, height: 40, fps: 30, durationUs: 100_000 },
+      clips: [{ id: "capture", sourceId: "capture", startUs: 0, endUs: 100_000 }],
+      cursorTrack: [
+        { tUs: 0, x: 20, y: 20, state: "default" as const },
+        { tUs: 66_667, x: 120, y: 20, state: "pressed" as const },
+      ],
+    };
+    const source: RasterSource = {
+      id: "capture",
+      width: 160,
+      height: 40,
+      frames: [{ tUs: 0, pixels: solidRaster(160, 40, { r: 230, g: 80, b: 40 }) }],
+    };
+    const framesFor = async (
+      presentationControls?: Parameters<typeof buildCompositionPlan>[0]["presentationControls"],
+    ): Promise<Buffer[]> =>
+      composePresentationFrames({
+        plan: buildCompositionPlan({
+          ...base,
+          ...(presentationControls === undefined ? {} : { presentationControls }),
+        }),
+        sources: [source],
+      });
+
+    const legacy = await framesFor();
+    const baseline = await framesFor({
+      cursor: { emphasis: "none", trailDurationUs: 0 },
+      frame: { fit: "contain", border: "none" },
+      export: { audio: "include", colorRange: "limited", metadata: "minimal" },
+    });
+    const spotlight = await framesFor({
+      cursor: { emphasis: "spotlight", trailDurationUs: 0 },
+      frame: { fit: "contain", border: "none" },
+      export: { audio: "include", colorRange: "limited", metadata: "minimal" },
+    });
+    const trail = await framesFor({
+      cursor: { emphasis: "trail", trailDurationUs: 80_000 },
+      frame: { fit: "contain", border: "none" },
+      export: { audio: "include", colorRange: "limited", metadata: "minimal" },
+    });
+    const covered = await framesFor({
+      cursor: { emphasis: "none", trailDurationUs: 0 },
+      frame: { fit: "cover", border: "none" },
+      export: { audio: "include", colorRange: "limited", metadata: "minimal" },
+    });
+    const bordered = await framesFor({
+      cursor: { emphasis: "none", trailDurationUs: 0 },
+      frame: { fit: "contain", border: "strong" },
+      export: { audio: "include", colorRange: "limited", metadata: "minimal" },
+    });
+
+    expect(Buffer.concat(legacy).equals(Buffer.concat(baseline))).toBe(true);
+    expect(Buffer.concat(spotlight).equals(Buffer.concat(baseline))).toBe(false);
+    expect(Buffer.concat(trail).equals(Buffer.concat(baseline))).toBe(false);
+    expect(Buffer.concat(covered).equals(Buffer.concat(baseline))).toBe(false);
+    expect(Buffer.concat(bordered).equals(Buffer.concat(baseline))).toBe(false);
+  });
+
   it("renders every speed region and blends crossfade frames while keeping output bounded", async () => {
     const plan = buildCompositionPlan({
       schemaVersion: 1,
@@ -211,6 +314,937 @@ describe("presentation compositor", () => {
     const decodedTransition = ppmPixelAt(decoded, 960, 540);
     expect(decodedTransition.r).toBeGreaterThan(50);
     expect(decodedTransition.b).toBeGreaterThan(50);
+  });
+
+  it("composes a reviewed V2 wipe at the complete scene boundary", async () => {
+    const plan = buildCompositionPlan({
+      schemaVersion: 1,
+      preset: "minimal",
+      source: { width: 160, height: 90, fps: 30, durationUs: 100_000 },
+      clips: [
+        {
+          id: "red",
+          sourceId: "red",
+          startUs: 0,
+          endUs: 100_000,
+          transitionAfter: { kind: "crossfade", durationUs: 66_667 },
+        },
+        {
+          id: "blue",
+          sourceId: "blue",
+          startUs: 0,
+          endUs: 100_000,
+          transitionAfter: { kind: "cut", durationUs: 0 },
+        },
+      ],
+    });
+    plan.reviewedTransitions = [
+      {
+        clipId: "red",
+        family: "wipe-left",
+        durationUs: 66_667,
+        easing: "linear",
+      },
+    ];
+
+    const frames = await composePresentationFrames({
+      plan,
+      sources: [
+        {
+          id: "red",
+          width: 160,
+          height: 90,
+          frames: [{ tUs: 0, pixels: flatSourceFrame({ r: 240, g: 20, b: 20 }) }],
+        },
+        {
+          id: "blue",
+          width: 160,
+          height: 90,
+          frames: [{ tUs: 0, pixels: flatSourceFrame({ r: 20, g: 20, b: 240 }) }],
+        },
+      ],
+    });
+
+    const middle = frames[2] as Buffer;
+    const left = (540 * 1920 + 480) * 3;
+    const right = (540 * 1920 + 1000) * 3;
+    expect(middle[left]).toBeLessThan(80);
+    expect(middle[left + 2]).toBeGreaterThan(180);
+    expect(middle[right]).toBeGreaterThan(180);
+    expect(middle[right + 2]).toBeLessThan(80);
+
+    const root = await mkdtemp(join(tmpdir(), "recordly-v2-wipe-decode-"));
+    roots.push(root);
+    const outputPath = join(root, "wipe.mp4");
+    await encodePresentationFrames({
+      frames,
+      width: 1920,
+      height: 1080,
+      fps: 30,
+      format: "mp4",
+      quality: "standard",
+      durationUs: Math.round((frames.length * 1_000_000) / 30),
+      outputPath,
+    });
+    const decodedPath = join(root, "wipe.ppm");
+    await extractPpmFrame(outputPath, 2, decodedPath);
+    const decoded = parsePpm(await readFile(decodedPath));
+    const decodedLeft = ppmPixelAt(decoded, 480, 540);
+    const decodedRight = ppmPixelAt(decoded, 1000, 540);
+    expect(decodedLeft.b).toBeGreaterThan(decodedLeft.r + 80);
+    expect(decodedRight.r).toBeGreaterThan(decodedRight.b + 80);
+  });
+
+  it("executes every reviewed V2 transition family deterministically", async () => {
+    const expected = [
+      { family: "crossfade", easing: "ease-in-out", left: "mixed", right: "mixed" },
+      { family: "dip-to-color", easing: "linear", left: "dark", right: "dark" },
+      { family: "wipe-left", easing: "ease-out", left: "blue", right: "blue" },
+      { family: "wipe-right", easing: "ease-in-out", left: "red", right: "blue" },
+      { family: "slide-left", easing: "linear", left: "red", right: "blue" },
+      { family: "slide-right", easing: "linear", left: "blue", right: "red" },
+      { family: "cut", easing: "linear", left: "red", right: "red" },
+    ] as const;
+    for (const transition of expected) {
+      const durationUs = transition.family === "cut" ? 0 : 66_667;
+      const plan = buildCompositionPlan({
+        schemaVersion: 1,
+        preset: "minimal",
+        source: { width: 160, height: 90, fps: 30, durationUs: 100_000 },
+        clips: [
+          {
+            id: "red",
+            sourceId: "red",
+            startUs: 0,
+            endUs: 100_000,
+            transitionAfter: {
+              kind: transition.family === "cut" ? "cut" : "crossfade",
+              durationUs,
+            },
+          },
+          {
+            id: "blue",
+            sourceId: "blue",
+            startUs: 0,
+            endUs: 100_000,
+            transitionAfter: { kind: "cut", durationUs: 0 },
+          },
+        ],
+      });
+      plan.reviewedTransitions = [
+        {
+          clipId: "red",
+          family: transition.family,
+          durationUs,
+          easing: transition.easing,
+          ...(transition.family === "dip-to-color" ? { color: "#000000" } : {}),
+        },
+      ];
+      const input = {
+        plan,
+        sources: [
+          {
+            id: "red",
+            width: 160,
+            height: 90,
+            frames: [{ tUs: 0, pixels: flatSourceFrame({ r: 240, g: 20, b: 20 }) }],
+          },
+          {
+            id: "blue",
+            width: 160,
+            height: 90,
+            frames: [{ tUs: 0, pixels: flatSourceFrame({ r: 20, g: 20, b: 240 }) }],
+          },
+        ],
+      };
+      const first = await composePresentationFrames(input);
+      const second = await composePresentationFrames(input);
+      expect(Buffer.concat(first).equals(Buffer.concat(second))).toBe(true);
+      const checkpoint = first[transition.family === "cut" ? 0 : 2] as Buffer;
+      const left = checkpoint[(540 * 1920 + 480) * 3] as number;
+      const leftBlue = checkpoint[(540 * 1920 + 480) * 3 + 2] as number;
+      const rightX = transition.family.startsWith("slide") ? 1400 : 1000;
+      const right = checkpoint[(540 * 1920 + rightX) * 3] as number;
+      const rightBlue = checkpoint[(540 * 1920 + rightX) * 3 + 2] as number;
+      const assertColor = (value: "mixed" | "dark" | "red" | "blue", red: number, blue: number) => {
+        if (value === "mixed") {
+          expect(red).toBeGreaterThan(70);
+          expect(blue).toBeGreaterThan(70);
+        } else if (value === "dark") {
+          expect(red).toBeLessThan(20);
+          expect(blue).toBeLessThan(20);
+        } else if (value === "red") {
+          expect(red).toBeGreaterThan(180);
+          expect(blue).toBeLessThan(80);
+        } else {
+          expect(red, `${transition.family} should reveal blue`).toBeLessThan(80);
+          expect(blue, `${transition.family} should reveal blue`).toBeGreaterThan(180);
+        }
+      };
+      assertColor(transition.left, left, leftBlue);
+      assertColor(transition.right, right, rightBlue);
+    }
+  });
+
+  it("includes the incoming V2 scene PiP before a reviewed crossfade", async () => {
+    const plan = buildCompositionPlan({
+      schemaVersion: 1,
+      preset: "minimal",
+      source: { width: 160, height: 90, fps: 30, durationUs: 100_000 },
+      clips: [
+        {
+          id: "red",
+          sourceId: "red",
+          startUs: 0,
+          endUs: 100_000,
+          transitionAfter: { kind: "crossfade", durationUs: 66_667 },
+        },
+        {
+          id: "blue",
+          sourceId: "blue",
+          startUs: 0,
+          endUs: 100_000,
+          transitionAfter: { kind: "cut", durationUs: 0 },
+        },
+      ],
+      pipTracks: [
+        {
+          assetId: "next-pip",
+          sha256: "f".repeat(64),
+          clipId: "blue",
+          startUs: 0,
+          endUs: 100_000,
+          corner: "top-right",
+          scale: 0.25,
+        },
+      ],
+    });
+    plan.reviewedTransitions = [
+      { clipId: "red", family: "crossfade", durationUs: 66_667, easing: "linear" },
+    ];
+    plan.visualTracks = [
+      {
+        id: "next-visual",
+        mediaId: "next-visual",
+        media: { kind: "image", durationUs: 1 },
+        clipId: "blue",
+        startUs: 0,
+        endUs: 100_000,
+        mediaTrim: { startUs: 0, endUs: 1 },
+        sync: "output-time",
+        layout: {
+          position: "top-left",
+          scale: 0.2,
+          fit: "cover",
+          crop: "none",
+          opacity: 1,
+          radiusPx: 0,
+          border: "none",
+        },
+        motion: { preset: "none", durationUs: 0 },
+      },
+    ];
+    const frames = await composePresentationFrames({
+      plan,
+      sources: [
+        {
+          id: "red",
+          width: 160,
+          height: 90,
+          frames: [{ tUs: 0, pixels: flatSourceFrame({ r: 240, g: 20, b: 20 }) }],
+        },
+        {
+          id: "blue",
+          width: 160,
+          height: 90,
+          frames: [{ tUs: 0, pixels: flatSourceFrame({ r: 20, g: 20, b: 240 }) }],
+        },
+        {
+          id: "next-pip",
+          width: 160,
+          height: 90,
+          frames: [{ tUs: 0, pixels: flatSourceFrame({ r: 20, g: 240, b: 20 }) }],
+        },
+        {
+          id: "next-visual",
+          width: 160,
+          height: 90,
+          frames: [{ tUs: 0, pixels: flatSourceFrame({ r: 240, g: 240, b: 20 }) }],
+        },
+      ],
+    });
+    const pixel = (frames[2] as Buffer).subarray(
+      (180 * 1920 + 1600) * 3,
+      (180 * 1920 + 1600) * 3 + 3,
+    );
+    expect(pixel[1]).toBeGreaterThan((pixel[2] as number) + 60);
+    const visualPixel = (frames[2] as Buffer).subarray(
+      (132 * 1920 + 216) * 3,
+      (132 * 1920 + 216) * 3 + 3,
+    );
+    expect(visualPixel[1]).toBeGreaterThan((visualPixel[2] as number) + 80);
+  });
+
+  it("renders only accepted V2 zoom proposals while preserving V1 zoom pixels", async () => {
+    const v1 = {
+      schemaVersion: 1,
+      projectId: "reviewed-zoom-render",
+      revision: 0,
+      revisionPolicy: { automatedRevisionLimit: 1, automatedRevisionCount: 0 },
+      captureSources: [
+        {
+          id: "capture",
+          sessionId: "session",
+          manifestSha256: "a".repeat(64),
+          timelineSha256: "b".repeat(64),
+          frameSetSha256: "c".repeat(64),
+          sourceWidth: 160,
+          sourceHeight: 90,
+          durationUs: 100_000,
+        },
+      ],
+      output: {
+        profile: "landscape-1080p",
+        width: 1920,
+        height: 1080,
+        fps: 30,
+        format: "mp4",
+        quality: "standard",
+      },
+      timeline: {
+        clips: [
+          {
+            id: "clip",
+            sourceId: "capture",
+            trim: { startUs: 0, endUs: 100_000 },
+            speedRegions: [],
+            zoomRegions: [
+              {
+                id: "legacy-zoom",
+                startUs: 0,
+                endUs: 100_000,
+                mode: "manual",
+                focus: { x: 0.25, y: 0.5 },
+                scale: 2,
+                easing: "linear",
+              },
+            ],
+            transitionAfter: { kind: "cut", durationUs: 0 },
+          },
+        ],
+      },
+      presentation: {
+        cursor: {
+          visible: false,
+          preset: "system",
+          sizePx: 24,
+          motion: "source",
+          clickEffect: "none",
+        },
+        frame: {
+          background: { kind: "solid", color: "#000000" },
+          paddingPx: 0,
+          radiusPx: 0,
+          shadow: "none",
+        },
+      },
+      overlays: { annotations: [], captions: [] },
+      audioTracks: [],
+      pipTracks: [],
+      renderHooks: [],
+      preview: { status: "not-requested" },
+    };
+    const source = {
+      id: "capture",
+      width: 160,
+      height: 90,
+      frames: [{ tUs: 0, pixels: splitSourceFrame() }],
+    };
+    const renderProjectFrames = async (project: unknown): Promise<Buffer[]> =>
+      composePresentationFrames({
+        plan: buildCompositionPlanFromProject(toProjectRenderInput(project)),
+        sources: [source],
+      });
+    const pixelAtCheckpoint = (frames: readonly Buffer[]): { r: number; b: number } => {
+      const offset = (540 * 1920 + 1200) * 3;
+      const frame = frames[2] as Buffer;
+      return { r: frame[offset] as number, b: frame[offset + 2] as number };
+    };
+
+    const v1Frames = await renderProjectFrames(v1);
+    const migrated = migrateV1RecordingProject(v1);
+    const v2Project = (status: "accepted" | "proposed" | "rejected") =>
+      validateRecordingProject({
+        ...migrated,
+        zoomProposals: [
+          {
+            id: "reviewed-zoom",
+            clipId: "clip",
+            sourceRange: { startUs: 0, endUs: 100_000 },
+            focus: { x: 0.25, y: 0.5 },
+            scale: 2,
+            easing: "linear",
+            review: { status, basis: "observed-input" },
+          },
+        ],
+      });
+    const accepted = await renderProjectFrames(v2Project("accepted"));
+    const acceptedRepeat = await renderProjectFrames(v2Project("accepted"));
+    const proposed = await renderProjectFrames(v2Project("proposed"));
+    const rejected = await renderProjectFrames(v2Project("rejected"));
+
+    expect(pixelAtCheckpoint(v1Frames).r).toBeGreaterThan(pixelAtCheckpoint(v1Frames).b + 100);
+    expect(pixelAtCheckpoint(accepted).r).toBeGreaterThan(pixelAtCheckpoint(accepted).b + 100);
+    expect(pixelAtCheckpoint(proposed).b).toBeGreaterThan(pixelAtCheckpoint(proposed).r + 100);
+    expect(pixelAtCheckpoint(rejected).b).toBeGreaterThan(pixelAtCheckpoint(rejected).r + 100);
+    expect(Buffer.concat(accepted).equals(Buffer.concat(acceptedRepeat))).toBe(true);
+  });
+
+  it("renders a validated V2 visual image track from a resolved media-ID raster source", async () => {
+    const migrated = migrateV1RecordingProject({
+      schemaVersion: 1,
+      projectId: "visual-image-render",
+      revision: 0,
+      revisionPolicy: { automatedRevisionLimit: 1, automatedRevisionCount: 0 },
+      captureSources: [
+        {
+          id: "capture",
+          sessionId: "session",
+          manifestSha256: "a".repeat(64),
+          timelineSha256: "b".repeat(64),
+          frameSetSha256: "c".repeat(64),
+          sourceWidth: 160,
+          sourceHeight: 90,
+          durationUs: 100_000,
+        },
+      ],
+      output: {
+        profile: "landscape-1080p",
+        width: 1920,
+        height: 1080,
+        fps: 30,
+        format: "mp4",
+        quality: "standard",
+      },
+      timeline: {
+        clips: [
+          {
+            id: "clip",
+            sourceId: "capture",
+            trim: { startUs: 0, endUs: 100_000 },
+            speedRegions: [],
+            zoomRegions: [],
+            transitionAfter: { kind: "cut", durationUs: 0 },
+          },
+        ],
+      },
+      presentation: {
+        cursor: {
+          visible: false,
+          preset: "system",
+          sizePx: 24,
+          motion: "source",
+          clickEffect: "none",
+        },
+        frame: {
+          background: { kind: "solid", color: "#000000" },
+          paddingPx: 0,
+          radiusPx: 0,
+          shadow: "none",
+        },
+      },
+      overlays: { annotations: [], captions: [] },
+      audioTracks: [],
+      pipTracks: [],
+      renderHooks: [],
+      preview: { status: "not-requested" },
+    });
+    const project = validateRecordingProject({
+      ...migrated,
+      media: {
+        assets: [
+          ...migrated.media.assets,
+          {
+            id: "still",
+            sha256: "d".repeat(64),
+            kind: "image",
+            provenance: "explicit-local-import",
+            durationUs: 1,
+          },
+          {
+            id: "video",
+            sha256: "e".repeat(64),
+            kind: "video",
+            provenance: "explicit-local-import",
+            durationUs: 100_000,
+            width: 80,
+            height: 80,
+            fps: 30,
+          },
+        ],
+      },
+      visualTracks: [
+        {
+          id: "still-track",
+          mediaId: "still",
+          clipId: "clip",
+          timeDomain: "clip-source-relative",
+          startUs: 0,
+          endUs: 100_000,
+          mediaTrim: { startUs: 0, endUs: 1 },
+          sync: "output-time",
+          layout: {
+            position: "top-right",
+            scale: 0.2,
+            fit: "contain",
+            crop: "none",
+            opacity: 1,
+            radiusPx: 0,
+            border: "none",
+          },
+          motion: { preset: "none", durationUs: 0 },
+        },
+        {
+          id: "video-track",
+          mediaId: "video",
+          clipId: "clip",
+          timeDomain: "clip-source-relative",
+          startUs: 0,
+          endUs: 100_000,
+          mediaTrim: { startUs: 0, endUs: 100_000 },
+          sync: "source-time",
+          layout: {
+            position: "bottom-left",
+            scale: 0.2,
+            fit: "contain",
+            crop: "none",
+            opacity: 1,
+            radiusPx: 0,
+            border: "none",
+          },
+          motion: { preset: "none", durationUs: 0 },
+        },
+      ],
+    });
+    const plan = buildCompositionPlanFromProject(toProjectRenderInput(project));
+    const frames = await composePresentationFrames({
+      plan,
+      sources: [
+        {
+          id: "capture",
+          width: 160,
+          height: 90,
+          frames: [{ tUs: 0, pixels: flatSourceFrame({ r: 40, g: 40, b: 40 }) }],
+        },
+        {
+          id: "still",
+          width: 160,
+          height: 90,
+          frames: [{ tUs: 0, pixels: flatSourceFrame({ r: 20, g: 230, b: 40 }) }],
+        },
+        {
+          id: "video",
+          width: 80,
+          height: 80,
+          frameAt: (tUs: number) => ({
+            tUs,
+            pixels: solidRaster(80, 80, { r: 20, g: 40, b: 230 }),
+          }),
+        },
+      ],
+    });
+
+    const pixel = (frames[1] as Buffer).subarray(
+      (120 * 1920 + 1700) * 3,
+      (120 * 1920 + 1700) * 3 + 3,
+    );
+    expect(pixel[1]).toBeGreaterThan((pixel[0] as number) + 100);
+    const videoPixel = (frames[1] as Buffer).subarray(
+      (948 * 1920 + 216) * 3,
+      (948 * 1920 + 216) * 3 + 3,
+    );
+    expect(videoPixel[2]).toBeGreaterThan((videoPixel[0] as number) + 100);
+  });
+
+  it("composes lazy V2 video and image tracks with temporal sync, fit, crop, motion, and borders", async () => {
+    const plan = buildCompositionPlan({
+      schemaVersion: 1,
+      preset: "minimal",
+      source: { width: 160, height: 90, fps: 30, durationUs: 200_000 },
+      clips: [
+        {
+          id: "clip",
+          sourceId: "capture",
+          startUs: 0,
+          endUs: 200_000,
+          speedRegions: [{ startUs: 0, endUs: 200_000, startRate: 2, endRate: 2 }],
+        },
+      ],
+    });
+    plan.visualTracks = [
+      {
+        id: "source-video",
+        mediaId: "source-video",
+        media: { kind: "video", durationUs: 200_000, width: 80, height: 80 },
+        clipId: "clip",
+        startUs: 0,
+        endUs: 200_000,
+        mediaTrim: { startUs: 0, endUs: 200_000 },
+        sync: "source-time",
+        layout: {
+          position: "bottom-left",
+          scale: 0.2,
+          fit: "contain",
+          crop: "none",
+          opacity: 1,
+          radiusPx: 0,
+          border: "strong",
+        },
+        motion: { preset: "pop", durationUs: 50_000 },
+      },
+      {
+        id: "output-video",
+        mediaId: "output-video",
+        media: { kind: "video", durationUs: 100_000, width: 80, height: 80 },
+        clipId: "clip",
+        startUs: 0,
+        endUs: 200_000,
+        mediaTrim: { startUs: 0, endUs: 100_000 },
+        sync: "output-time",
+        layout: {
+          position: "top-left",
+          scale: 0.2,
+          fit: "contain",
+          crop: "none",
+          opacity: 0.8,
+          radiusPx: 20,
+          border: "light",
+        },
+        motion: { preset: "fade", durationUs: 50_000 },
+      },
+      {
+        id: "still-image",
+        mediaId: "still-image",
+        media: { kind: "image", durationUs: 1 },
+        clipId: "clip",
+        startUs: 0,
+        endUs: 200_000,
+        mediaTrim: { startUs: 0, endUs: 1 },
+        sync: "output-time",
+        layout: {
+          position: "top-right",
+          scale: 0.2,
+          fit: "cover",
+          crop: { x: 0.5, y: 0, width: 0.5, height: 1 },
+          opacity: 1,
+          radiusPx: 0,
+          border: "none",
+        },
+        motion: { preset: "none", durationUs: 0 },
+      },
+    ] satisfies VisualTrack[];
+    const sourceVideoTimes: number[] = [];
+    const outputVideoTimes: number[] = [];
+    const imageTimes: number[] = [];
+    const still = solidRaster(160, 90, { r: 240, g: 220, b: 20 });
+    for (let y = 0; y < 90; y += 1)
+      for (let x = 0; x < 80; x += 1) still.set([220, 20, 20], (y * 160 + x) * 3);
+    const input = {
+      plan,
+      sources: [
+        {
+          id: "capture",
+          width: 160,
+          height: 90,
+          frameAt: (tUs: number) => ({ tUs, pixels: flatSourceFrame({ r: 40, g: 40, b: 40 }) }),
+        },
+        {
+          id: "source-video",
+          width: 80,
+          height: 80,
+          frameAt: (tUs: number) => {
+            sourceVideoTimes.push(tUs);
+            return {
+              tUs,
+              pixels: solidRaster(
+                80,
+                80,
+                tUs < 50_000
+                  ? { r: 220, g: 20, b: 20 }
+                  : tUs < 100_000
+                    ? { r: 20, g: 220, b: 20 }
+                    : { r: 20, g: 20, b: 220 },
+              ),
+            };
+          },
+        },
+        {
+          id: "output-video",
+          width: 80,
+          height: 80,
+          frameAt: (tUs: number) => {
+            outputVideoTimes.push(tUs);
+            return {
+              tUs,
+              pixels: solidRaster(
+                80,
+                80,
+                tUs < 50_000 ? { r: 220, g: 220, b: 20 } : { r: 20, g: 220, b: 20 },
+              ),
+            };
+          },
+        },
+        {
+          id: "still-image",
+          width: 160,
+          height: 90,
+          frameAt: (tUs: number) => {
+            imageTimes.push(tUs);
+            return { tUs, pixels: still };
+          },
+        },
+      ],
+    };
+    const first = await composePresentationFrames(input);
+    const repeat = await composePresentationFrames(input);
+    const pixel = (frame: Buffer, x: number, y: number) => {
+      const offset = (y * 1920 + x) * 3;
+      return {
+        r: frame[offset] as number,
+        g: frame[offset + 1] as number,
+        b: frame[offset + 2] as number,
+      };
+    };
+
+    expect(first).toHaveLength(3);
+    expect(pixel(first[0] as Buffer, 216, 132).r).toBeLessThan(80);
+    expect(pixel(first[1] as Buffer, 216, 132).r).toBeGreaterThan(100);
+    expect(pixel(first[2] as Buffer, 216, 132).g).toBeGreaterThan(150);
+    expect(pixel(first[2] as Buffer, 50, 132).r).toBeGreaterThan(200);
+    expect(pixel(first[2] as Buffer, 216, 24).r).toBeGreaterThan(180);
+    expect(pixel(first[0] as Buffer, 216, 948).b).toBeLessThan(80);
+    expect(pixel(first[2] as Buffer, 216, 948).b).toBeGreaterThan(150);
+    expect(pixel(first[2] as Buffer, 216, 840).r).toBeLessThan(60);
+    expect(pixel(first[0] as Buffer, 1704, 132)).toEqual(pixel(first[2] as Buffer, 1704, 132));
+    expect(pixel(first[2] as Buffer, 1704, 132).r).toBeGreaterThan(200);
+    expect(pixel(first[2] as Buffer, 1704, 132).b).toBeLessThan(80);
+    expect(sourceVideoTimes.some((time) => time >= 130_000)).toBe(true);
+    expect(outputVideoTimes.some((time) => time >= 60_000 && time <= 70_000)).toBe(true);
+    expect(imageTimes.every((time) => time === 0)).toBe(true);
+    expect(Buffer.concat(first).equals(Buffer.concat(repeat))).toBe(true);
+    const root = await mkdtemp(join(tmpdir(), "recordly-visual-track-decode-"));
+    roots.push(root);
+    const outputPath = join(root, "visual-track.mp4");
+    await encodePresentationFrames({
+      frames: first,
+      width: 1920,
+      height: 1080,
+      fps: 30,
+      format: "mp4",
+      quality: "standard",
+      durationUs: 100_000,
+      outputPath,
+    });
+    const decodedPath = join(root, "visual-track.ppm");
+    await extractPpmFrame(outputPath, 2, decodedPath);
+    const decoded = parsePpm(await readFile(decodedPath));
+    const decodedVideo = ppmPixelAt(decoded, 216, 948);
+    const decodedImage = ppmPixelAt(decoded, 1704, 132);
+    expect(decodedVideo.b).toBeGreaterThan(decodedVideo.r + 80);
+    expect(decodedImage.r).toBeGreaterThan(decodedImage.b + 80);
+  });
+
+  it("fails closed when a V2 visual source is missing, mismatched, outside trim, or unsupported", async () => {
+    const visualPlan = (mediaTrim = { startUs: 0, endUs: 100_000 }) => {
+      const plan = buildCompositionPlan({
+        schemaVersion: 1,
+        preset: "minimal",
+        source: { width: 160, height: 90, fps: 30, durationUs: 100_000 },
+        clips: [{ id: "clip", sourceId: "capture", startUs: 0, endUs: 100_000 }],
+      });
+      plan.visualTracks = [
+        {
+          id: "visual",
+          mediaId: "visual",
+          media: { kind: "video", durationUs: 100_000, width: 80, height: 80 },
+          clipId: "clip",
+          startUs: 0,
+          endUs: 100_000,
+          mediaTrim,
+          sync: "output-time",
+          layout: {
+            position: "top-left",
+            scale: 0.2,
+            fit: "contain",
+            crop: "none",
+            opacity: 1,
+            radiusPx: 0,
+            border: "none",
+          },
+          motion: { preset: "none", durationUs: 0 },
+        },
+      ];
+      return plan;
+    };
+    const capture = {
+      id: "capture",
+      width: 160,
+      height: 90,
+      frames: [{ tUs: 0, pixels: flatSourceFrame({ r: 40, g: 40, b: 40 }) }],
+    };
+    const video = {
+      id: "visual",
+      width: 80,
+      height: 80,
+      frames: [{ tUs: 0, pixels: solidRaster(80, 80, { r: 20, g: 220, b: 20 }) }],
+    };
+
+    await expect(
+      composePresentationFrames({ plan: visualPlan(), sources: [capture] }),
+    ).rejects.toThrow(/visual source is unavailable/u);
+    await expect(
+      composePresentationFrames({
+        plan: visualPlan(),
+        sources: [{ ...video, width: 81 }, capture],
+      }),
+    ).rejects.toThrow(/geometry/u);
+    await expect(
+      composePresentationFrames({
+        plan: visualPlan({ startUs: 0, endUs: 1 }),
+        sources: [capture, video],
+      }),
+    ).rejects.toThrow(/media trim/u);
+    const unsupported = visualPlan();
+    const track = unsupported.visualTracks?.[0] as VisualTrack;
+    unsupported.visualTracks = [{ ...track, media: { ...track.media, kind: "audio" as never } }];
+    await expect(
+      composePresentationFrames({ plan: unsupported, sources: [capture, video] }),
+    ).rejects.toThrow(/unsupported media kind/u);
+  });
+
+  it("clips cover crop rounding and strong borders to the visible layout box", async () => {
+    const plan = buildCompositionPlan({
+      schemaVersion: 1,
+      preset: "minimal",
+      source: { width: 160, height: 90, fps: 30, durationUs: 100_000 },
+      clips: [{ id: "clip", sourceId: "capture", startUs: 0, endUs: 100_000 }],
+    });
+    plan.visualTracks = [
+      {
+        id: "portrait-cover",
+        mediaId: "portrait-cover",
+        media: { kind: "image", durationUs: 1 },
+        clipId: "clip",
+        startUs: 0,
+        endUs: 100_000,
+        mediaTrim: { startUs: 0, endUs: 1 },
+        sync: "output-time",
+        layout: {
+          position: "top-left",
+          scale: 0.2,
+          fit: "cover",
+          crop: "none",
+          opacity: 1,
+          radiusPx: 20,
+          border: "strong",
+        },
+        motion: { preset: "none", durationUs: 0 },
+      },
+    ];
+    const frames = await composePresentationFrames({
+      plan,
+      sources: [
+        {
+          id: "capture",
+          width: 160,
+          height: 90,
+          frames: [{ tUs: 0, pixels: flatSourceFrame({ r: 40, g: 40, b: 40 }) }],
+        },
+        {
+          id: "portrait-cover",
+          width: 80,
+          height: 160,
+          frames: [{ tUs: 0, pixels: solidRaster(80, 160, { r: 20, g: 220, b: 20 }) }],
+        },
+      ],
+    });
+    const frame = frames[1] as Buffer;
+    const pixel = (x: number, y: number) => {
+      const offset = (y * 1920 + x) * 3;
+      return {
+        r: frame[offset] as number,
+        g: frame[offset + 1] as number,
+        b: frame[offset + 2] as number,
+      };
+    };
+
+    expect(pixel(24, 24).r).toBeGreaterThan(200);
+    expect(pixel(216, 24).r).toBeLessThan(60);
+    expect(pixel(216, 120).g).toBeGreaterThan(150);
+  });
+
+  it("uses presentation time for visual fade motion under a speed-ramped clip", async () => {
+    const plan = buildCompositionPlan({
+      schemaVersion: 1,
+      preset: "minimal",
+      source: { width: 160, height: 90, fps: 30, durationUs: 400_000 },
+      clips: [
+        {
+          id: "clip",
+          sourceId: "capture",
+          startUs: 0,
+          endUs: 400_000,
+          speedRegions: [{ startUs: 0, endUs: 400_000, startRate: 2, endRate: 2 }],
+        },
+      ],
+    });
+    plan.visualTracks = [
+      {
+        id: "fading-video",
+        mediaId: "fading-video",
+        media: { kind: "video", durationUs: 400_000, width: 80, height: 80 },
+        clipId: "clip",
+        startUs: 0,
+        endUs: 400_000,
+        mediaTrim: { startUs: 0, endUs: 400_000 },
+        sync: "source-time",
+        layout: {
+          position: "top-left",
+          scale: 0.2,
+          fit: "contain",
+          crop: "none",
+          opacity: 1,
+          radiusPx: 0,
+          border: "none",
+        },
+        motion: { preset: "fade", durationUs: 100_000 },
+      },
+    ];
+    const frames = await composePresentationFrames({
+      plan,
+      sources: [
+        {
+          id: "capture",
+          width: 160,
+          height: 90,
+          frames: [{ tUs: 0, pixels: flatSourceFrame({ r: 40, g: 40, b: 40 }) }],
+        },
+        {
+          id: "fading-video",
+          width: 80,
+          height: 80,
+          frameAt: (tUs: number) => ({
+            tUs,
+            pixels: solidRaster(80, 80, { r: 20, g: 220, b: 20 }),
+          }),
+        },
+      ],
+    });
+    const greenAt = (frame: Buffer) => frame[(132 * 1920 + 216) * 3 + 1] as number;
+
+    expect(frames).toHaveLength(6);
+    expect(greenAt(frames[2] as Buffer)).toBeLessThan(200);
+    expect(greenAt(frames[3] as Buffer)).toBeGreaterThan(200);
   });
 
   it("consumes a lazy frame provider one frame at a time without a decoded frame array", async () => {
@@ -494,6 +1528,31 @@ describe("presentation compositor", () => {
     expect((await readFile(gif.outputPath)).subarray(0, 6).toString("ascii")).toMatch(
       /^GIF8[79]a$/u,
     );
+    const mutedProject = validateRecordingProject({
+      ...migrateV1RecordingProject({
+        schemaVersion: 1,
+        ...base,
+        pipTracks: [],
+        preview: { status: "not-requested" as const },
+      }),
+      presentationControls: {
+        cursor: { emphasis: "none", trailDurationUs: 0 },
+        frame: { fit: "contain", border: "none" },
+        export: { audio: "mute", colorRange: "limited", metadata: "none" },
+      },
+    });
+    const muted = await renderRecordingProject({
+      project: mutedProject,
+      sources,
+      assetRoot,
+      assets: {},
+      outputPath: join(root, "project-muted.mp4"),
+      ...renderEvidence,
+    });
+    expect(await probeRenderedVideo(muted.outputPath)).toMatchObject({
+      hasAudio: false,
+      colorRange: "tv",
+    });
   }, 90_000);
   it("applies clip trims and speed regions before selecting the visible source frame", async () => {
     const plan = buildCompositionPlan({

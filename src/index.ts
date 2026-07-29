@@ -1,4 +1,23 @@
 export type {
+  ActivityAnalysisConfig,
+  ActivityAnalysisInput,
+  ActivityAnalysisResult,
+  EditorialObservedEvent,
+  EditorialObservedEventKind,
+  EditorialProposal,
+  EditorialProposalInput,
+  EditorialReviewTrimProposal,
+  EditorialTransitionSuggestion,
+  EditorialZoomProposal,
+} from "./analysis/index.js";
+export {
+  analyzeDeadTime,
+  applyAcceptedEditorialProposal,
+  buildEditorialProposal,
+  EDITORIAL_PROPOSAL_SCHEMA_VERSION,
+  validateEditorialProposal,
+} from "./analysis/index.js";
+export type {
   CaptureAdapterOptions,
   CapturedFrame,
   CaptureFailureReason,
@@ -37,15 +56,25 @@ export type {
   AuthoredProjectText,
   ProjectAssetReference,
   ProjectCaptureSource,
+  ProjectMediaAsset,
   ProjectRenderInput,
+  RecordingProfileReference,
+  RecordingProfileSnapshot,
   RecordingProject,
+  RecordingProjectV1,
+  RecordingProjectV2,
 } from "./project/index.js";
 export {
   assertProjectTextReadyForExport,
+  builtInRecordingProfiles,
   canonicalRecordingProject,
   MAX_AUTOMATED_PROJECT_REVISIONS,
+  migrateV1RecordingProject,
+  profileSnapshotSha256,
   reviseRecordingProject,
   toProjectRenderInput,
+  validateRecordingProfileReference,
+  validateRecordingProfileSnapshot,
   validateRecordingProject,
 } from "./project/index.js";
 export type {

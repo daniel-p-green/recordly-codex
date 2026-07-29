@@ -13,6 +13,11 @@ import {
 } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { isAbsolute, join, relative, resolve } from "node:path";
+import {
+  applyAcceptedEditorialProposal as applyEditorialProposal,
+  buildEditorialProposal,
+  type EditorialProposal,
+} from "../src/analysis/index.js";
 
 import {
   type RecordingRequest,
@@ -20,11 +25,18 @@ import {
   validateSessionEvent,
 } from "../src/contracts/index.js";
 import { canonicalJson } from "../src/manifest/index.js";
+import { createPrivateAudioNormalizer } from "../src/media/private-audio-normalization.js";
+import { createPrivateMediaLibrary } from "../src/media/private-media-library.js";
+import { createPrivateVisualRasterAdapter } from "../src/media/private-visual-raster.js";
 import {
+  applyRecordingProfile,
+  builtInRecordingProfiles,
+  profileSnapshotSha256,
   type RecordingProject,
   reviseRecordingProject,
   validateRecordingProject,
 } from "../src/project/index.js";
+import { previewJudgmentDigests, previewJudgmentSummary } from "../src/project/preview-judgment.js";
 import { renderRecordingProject } from "../src/render/project-renderer.js";
 import { type RenderedSealedSession, renderSealedSession } from "../src/render/sealed-session.js";
 import {
@@ -33,16 +45,29 @@ import {
   SessionStore,
 } from "../src/session/index.js";
 import { browserStartHelper, browserStopHelper } from "./browser-helper.js";
-import { type CaptureBroker, createCaptureBroker } from "./capture-broker.js";
+import {
+  type CaptureBroker,
+  createCaptureBroker,
+  DEFAULT_CAPTURE_BUDGET,
+} from "./capture-broker.js";
 import { RecordingServiceUnavailableError } from "./handlers.js";
-import { loadProjectAssetRegistry } from "./project-asset-registry.js";
+import { inspectPrivatePreview } from "./preview-inspection.js";
+import { digestPrivateArtifact } from "./private-artifact.js";
+import { loadProjectAssetRegistry, registerProjectAudioAsset } from "./project-asset-registry.js";
+import { ProjectMediaStore } from "./project-media-store.js";
 import { RecordingProjectStore } from "./project-persistence.js";
+import { PreviewJudgmentStore } from "./project-preview-judgment-store.js";
 import {
   createVerifiedCaptureSource,
   readSourceKeyedCapturePresentationEvidence,
+  readVerifiedCaptureEditorialEvidence,
 } from "./project-render-source.js";
+import { resolveProjectVisualSources } from "./project-visual-resolver.js";
+import { RecordingProfileStore } from "./recording-profile-store.js";
 import { createRenderPublication, publishThenCompareAndSwap } from "./render-publication.js";
 import type {
+  CaptureBudget,
+  CaptureStatus,
   RecordingMcpService,
   RecordingProjectView,
   RecordingSessionView,
@@ -58,6 +83,8 @@ const activeCaptureBrokers = new Map<string, CaptureBroker>();
 
 type SessionStoreServiceOptions = {
   artifactRoot?: string;
+  /** Explicitly authorized import root. It is never accepted from MCP input. */
+  authorizedImportRoot?: string;
   idSource?: () => string;
   clockUs?: () => number;
 };
@@ -74,6 +101,10 @@ type BrokerState = {
   sessionId: string;
   origin: string;
   phase: "ready" | "claimed" | "running" | "stopped" | "failed";
+  budget: CaptureBudget;
+  acceptedFrames: number;
+  acceptedBytes: number;
+  reason?: "budget_exceeded";
 };
 
 function nodeFileSystem(): SessionFileSystem {
@@ -120,6 +151,38 @@ function validArtifactRoot(value: string): string {
     throw new RecordingServiceUnavailableError();
   }
   return resolve(value);
+}
+
+function captureBudget(input: Partial<CaptureBudget> = {}): CaptureBudget {
+  const budget = {
+    maxCaptureSeconds: input.maxCaptureSeconds ?? DEFAULT_CAPTURE_BUDGET.maxCaptureSeconds,
+    maxAcceptedFrames: input.maxAcceptedFrames ?? DEFAULT_CAPTURE_BUDGET.maxAcceptedFrames,
+    maxAcceptedBytes: input.maxAcceptedBytes ?? DEFAULT_CAPTURE_BUDGET.maxAcceptedBytes,
+  };
+  if (
+    !Number.isSafeInteger(budget.maxCaptureSeconds) ||
+    budget.maxCaptureSeconds < 1 ||
+    budget.maxCaptureSeconds > 300 ||
+    !Number.isSafeInteger(budget.maxAcceptedFrames) ||
+    budget.maxAcceptedFrames < 1 ||
+    budget.maxAcceptedFrames > 9_000 ||
+    !Number.isSafeInteger(budget.maxAcceptedBytes) ||
+    budget.maxAcceptedBytes < 1 ||
+    budget.maxAcceptedBytes > 512 * 1024 * 1024
+  ) {
+    throw new RecordingServiceUnavailableError();
+  }
+  return budget;
+}
+
+function captureStatus(state: BrokerState): CaptureStatus {
+  return {
+    phase: state.phase,
+    ...state.budget,
+    acceptedFrames: state.acceptedFrames,
+    acceptedBytes: state.acceptedBytes,
+    ...(state.reason === undefined ? {} : { reason: state.reason }),
+  };
 }
 
 function defaultArtifactRoot(): string {
@@ -206,8 +269,10 @@ function stampedEvent(
 function sessionView(
   inspection: SessionInspection,
   id: string,
+  browserHelperRoot: string,
   status?: RecordingSessionView["status"],
   delivery?: RenderedSealedSession,
+  capture?: CaptureStatus,
 ): RecordingSessionView {
   const artifactRoot = inspection.paths.root;
   const view: RecordingSessionView = {
@@ -216,14 +281,16 @@ function sessionView(
     status: status ?? (inspection.state === "active" ? "open" : "sealed"),
     eventCount: inspection.eventCount,
     artifactRoot,
+    browserHelperRoot,
     browserStartHelperPath: inspection.paths.startWrapper,
     browserStopHelperPath: inspection.paths.stopWrapper,
     captureConfigPath: inspection.paths.captureConfig,
     artifactPaths: delivery === undefined ? artifactPaths(inspection) : delivery.artifactPaths,
   };
-  if (delivery === undefined) return view;
+  const withCapture = capture === undefined ? view : { ...view, capture };
+  if (delivery === undefined) return withCapture;
   return {
-    ...view,
+    ...withCapture,
     videoPath: delivery.videoPath,
     manifestPath: delivery.manifestPath,
     qualityReportPath: delivery.qualityReportPath,
@@ -259,7 +326,33 @@ async function readBrokerState(inspection: SessionInspection): Promise<BrokerSta
     ) {
       throw new RecordingServiceUnavailableError();
     }
-    return value as BrokerState;
+    const legacy = value as Record<string, unknown>;
+    const budget = captureBudget(
+      legacy["budget"] !== null && typeof legacy["budget"] === "object"
+        ? (legacy["budget"] as Partial<CaptureBudget>)
+        : {},
+    );
+    const acceptedFrames = legacy["acceptedFrames"] ?? 0;
+    const acceptedBytes = legacy["acceptedBytes"] ?? 0;
+    if (
+      !Number.isSafeInteger(acceptedFrames) ||
+      (acceptedFrames as number) < 0 ||
+      !Number.isSafeInteger(acceptedBytes) ||
+      (acceptedBytes as number) < 0 ||
+      (legacy["reason"] !== undefined && legacy["reason"] !== "budget_exceeded")
+    ) {
+      throw new RecordingServiceUnavailableError();
+    }
+    return {
+      schemaVersion: 1,
+      sessionId: inspection.sessionId,
+      origin: legacy["origin"] as string,
+      phase: legacy["phase"] as BrokerState["phase"],
+      budget,
+      acceptedFrames: acceptedFrames as number,
+      acceptedBytes: acceptedBytes as number,
+      ...(legacy["reason"] === undefined ? {} : { reason: "budget_exceeded" }),
+    };
   } catch (error) {
     if (isNotFound(error)) return undefined;
     throw error;
@@ -304,7 +397,15 @@ async function startBroker(
     sessionId: inspection.sessionId,
     root: inspection.paths.root,
     origin: state.origin,
-    onPhase: async (phase) => writePrivateJson(statePath, { ...state, phase }),
+    ...state.budget,
+    onPhase: async (phase, capture) =>
+      writePrivateJson(statePath, {
+        ...state,
+        phase,
+        acceptedFrames: capture.acceptedFrames,
+        acceptedBytes: capture.acceptedBytes,
+        ...(capture.reason === undefined ? {} : { reason: capture.reason }),
+      }),
   });
   try {
     const helperInput = {
@@ -324,6 +425,7 @@ async function startBroker(
 async function createSessionBroker(
   artifactRoot: string,
   inspection: SessionInspection,
+  budget: CaptureBudget,
 ): Promise<void> {
   const request = validateRecordingRequest(
     JSON.parse(await readFile(inspection.paths.request, "utf8")) as unknown,
@@ -333,6 +435,9 @@ async function createSessionBroker(
     sessionId: inspection.sessionId,
     origin: new URL(request.url).origin,
     phase: "ready",
+    budget,
+    acceptedFrames: 0,
+    acceptedBytes: 0,
   };
   await writePrivateJson(brokerStatePath(inspection), state);
   await startBroker(artifactRoot, inspection, state);
@@ -354,6 +459,16 @@ async function ensureBroker(artifactRoot: string, inspection: SessionInspection)
   throw new RecordingServiceUnavailableError();
 }
 
+async function currentCaptureStatus(
+  artifactRoot: string,
+  inspection: SessionInspection,
+): Promise<CaptureStatus | undefined> {
+  const live = activeCaptureBrokers.get(captureBrokerKey(artifactRoot, inspection.sessionId));
+  if (live !== undefined) return live.status();
+  const state = await readBrokerState(inspection);
+  return state === undefined ? undefined : captureStatus(state);
+}
+
 function generatedRequest(
   input: Parameters<RecordingMcpService["create"]>[0],
   requestIdValue: string,
@@ -368,7 +483,7 @@ function generatedRequest(
     output: { width: 1920, height: 1080, fps: 30, format: "mp4" },
     policy: {
       allowPrivateOrigin: input.allowPrivateOrigin ?? false,
-      allowedOrigins: input.allowedOrigins ?? [parsed.origin],
+      allowedOrigins: [parsed.origin],
       maxAttempts: 2,
     },
   });
@@ -539,8 +654,136 @@ function manifestProjectSource(input: {
   });
 }
 
-function projectView(project: RecordingProject, projectSha256: string): RecordingProjectView {
-  return { project, projectSha256 };
+function projectView(
+  project: RecordingProject,
+  projectSha256: string,
+  judgment?: RecordingProjectView["previewJudgment"],
+): RecordingProjectView {
+  return {
+    project,
+    projectSha256,
+    ...(judgment === undefined ? {} : { previewJudgment: judgment }),
+  };
+}
+
+async function canonicalEditorialProposal(
+  artifactRoot: string,
+  project: RecordingProject,
+): Promise<EditorialProposal> {
+  if (project.schemaVersion !== 2) throw new RecordingServiceUnavailableError();
+  const evidence = await Promise.all(
+    project.captureSources.map((source) =>
+      readVerifiedCaptureEditorialEvidence({ artifactRoot, source }),
+    ),
+  );
+  const observedEvents = evidence
+    .flatMap((entry) => entry.observedEvents)
+    .sort(
+      (left, right) =>
+        left.sourceId.localeCompare(right.sourceId) ||
+        left.tUs - right.tUs ||
+        left.id.localeCompare(right.id),
+    )
+    .slice(0, 2_048);
+  return buildEditorialProposal({
+    schemaVersion: 1,
+    project,
+    observedEvents,
+    deadTimeBySource: project.captureSources.map((source, index) => ({
+      sourceId: source.id,
+      analysis: (
+        evidence[index] as Awaited<ReturnType<typeof readVerifiedCaptureEditorialEvidence>>
+      ).deadTime,
+    })),
+  });
+}
+
+function profileSummary(profile: {
+  source: "builtin" | "owner-local";
+  profileId: string;
+  profileRevision: number;
+  snapshotSha256: string;
+}): {
+  source: "builtin" | "owner-local";
+  profileId: string;
+  profileRevision: number;
+  snapshotSha256: string;
+} {
+  return {
+    source: profile.source,
+    profileId: profile.profileId,
+    profileRevision: profile.profileRevision,
+    snapshotSha256: profile.snapshotSha256,
+  };
+}
+
+async function resolveCanonicalProfile(
+  artifactRoot: string,
+  ownerToken: string,
+  locator: {
+    source: "builtin" | "owner-local";
+    profileId: string;
+    profileRevision?: number;
+    snapshotSha256?: string;
+  },
+) {
+  const profile =
+    locator.source === "builtin"
+      ? builtInRecordingProfiles().find((candidate) => candidate.profileId === locator.profileId)
+      : await new RecordingProfileStore(artifactRoot, ownerToken).load(locator.profileId);
+  if (profile === undefined || profile.source !== locator.source)
+    throw new RecordingServiceUnavailableError();
+  if (
+    (locator.profileRevision !== undefined &&
+      profile.profileRevision !== locator.profileRevision) ||
+    (locator.snapshotSha256 !== undefined &&
+      profile.snapshotSha256 !== locator.snapshotSha256.toLowerCase())
+  ) {
+    throw new RecordingServiceUnavailableError();
+  }
+  return profile;
+}
+
+async function previewArtifactDigest(
+  artifactRoot: string,
+  project: RecordingProject,
+): Promise<string> {
+  return (
+    await digestPrivateArtifact({
+      root: artifactRoot,
+      relativePath: previewArtifactRelativePath(project),
+      maximumBytes: 512 * 1024 * 1024,
+    })
+  ).sha256;
+}
+
+function previewArtifactRelativePath(project: RecordingProject): string {
+  return `projects/renders/${project.projectId}-r${project.revision}-preview.${project.output.format}`;
+}
+
+async function inspectedPreviewJudgment(
+  artifactRoot: string,
+  ownerToken: string,
+  project: RecordingProject,
+): Promise<RecordingProjectView["previewJudgment"]> {
+  const judgment = await new PreviewJudgmentStore(artifactRoot, ownerToken).load(
+    project.projectId,
+    project.revision,
+  );
+  if (judgment === undefined) return undefined;
+  const summary = previewJudgmentSummary(judgment, project);
+  try {
+    const digests = previewJudgmentDigests(project);
+    const artifactDigest = await previewArtifactDigest(artifactRoot, project);
+    const current =
+      judgment.projectSha256 === digests.projectSha256 &&
+      judgment.renderInputSha256 === digests.renderInputSha256 &&
+      judgment.renderRecipeSha256 === digests.renderRecipeSha256 &&
+      judgment.previewArtifactSha256 === artifactDigest;
+    return { ...summary, status: current ? "current" : "stale" };
+  } catch {
+    return { ...summary, status: "stale" };
+  }
 }
 
 /** Local session persistence with browser helpers aligned to SessionStore's checked-in runtime contract. */
@@ -549,11 +792,18 @@ export function createSessionStoreService(
 ): RecordingMcpService {
   const clockUs = options.clockUs ?? (() => Number(process.hrtime.bigint() / 1_000n));
   const projectRoot = resolve(process.cwd());
-  const browserHelperRoot = join(projectRoot, ".playwright-mcp", "recordly-codex");
   const artifactRoot =
     options.artifactRoot === undefined
       ? defaultArtifactRoot()
       : validArtifactRoot(options.artifactRoot);
+  const browserHelperRoot = join(artifactRoot, "browser-helpers");
+  const authorizedImportRoot =
+    options.authorizedImportRoot === undefined &&
+    process.env["RECORDLY_CODEX_IMPORT_ROOT"] === undefined
+      ? undefined
+      : validArtifactRoot(
+          options.authorizedImportRoot ?? (process.env["RECORDLY_CODEX_IMPORT_ROOT"] as string),
+        );
   const context = readOrCreateOwnerToken(artifactRoot)
     .then(
       (ownerToken): ServiceContext => ({
@@ -602,8 +852,16 @@ export function createSessionStoreService(
       const request = generatedRequest(input, randomUUID());
       const inspection = await ready.store.createSession(request);
       try {
-        await createSessionBroker(artifactRoot, inspection);
-        return sessionView(inspection, request.requestId);
+        const budget = captureBudget(input);
+        await createSessionBroker(artifactRoot, inspection, budget);
+        return sessionView(
+          inspection,
+          request.requestId,
+          browserHelperRoot,
+          undefined,
+          undefined,
+          await currentCaptureStatus(artifactRoot, inspection),
+        );
       } catch (error) {
         await ready.store.discard(inspection.sessionId).catch(() => undefined);
         throw error;
@@ -616,38 +874,83 @@ export function createSessionStoreService(
         await ensureBroker(artifactRoot, inspection);
         const id = await requestId(inspection);
         const eventToAppend = await stampedEvent(sessionId, event, inspection, ready.clockUs());
-        return sessionView(await ready.store.appendEvent(sessionId, eventToAppend), id);
+        const updated = await ready.store.appendEvent(sessionId, eventToAppend);
+        return sessionView(
+          updated,
+          id,
+          browserHelperRoot,
+          undefined,
+          undefined,
+          await currentCaptureStatus(artifactRoot, updated),
+        );
       }),
     inspect: async ({ sessionId }) => {
       const ready = await context;
       const inspection = await ready.store.inspect(sessionId);
-      await ensureBroker(artifactRoot, inspection);
-      return sessionView(inspection, await requestId(inspection));
-    },
-    seal: async ({ sessionId }) => {
-      const ready = await context;
-      const beforeSeal = await ready.store.inspect(sessionId);
-      await ensureBroker(artifactRoot, beforeSeal);
-      const inspection = await ready.store.seal(sessionId);
-      const brokerKey = captureBrokerKey(artifactRoot, sessionId);
-      await activeCaptureBrokers.get(brokerKey)?.close();
-      activeCaptureBrokers.delete(brokerKey);
-      const delivery = await renderSealedSession({ artifactRoot, sessionId });
-      if (!delivery.approved || delivery.timingMode !== "broker-receipt-offsets") {
-        throw new Error("sealed capture is not approved for delivery");
+      const existingCapture = await currentCaptureStatus(artifactRoot, inspection);
+      if (existingCapture?.phase === "failed") {
+        return sessionView(
+          inspection,
+          await requestId(inspection),
+          browserHelperRoot,
+          undefined,
+          undefined,
+          existingCapture,
+        );
       }
-      return sessionView(inspection, await requestId(inspection), undefined, delivery);
+      await ensureBroker(artifactRoot, inspection);
+      return sessionView(
+        inspection,
+        await requestId(inspection),
+        browserHelperRoot,
+        undefined,
+        undefined,
+        await currentCaptureStatus(artifactRoot, inspection),
+      );
     },
-    discard: async ({ sessionId }) => {
-      const ready = await context;
-      const inspection = await ready.store.inspect(sessionId);
-      const discarded = sessionView(inspection, await requestId(inspection), "discarded");
-      const brokerKey = captureBrokerKey(artifactRoot, sessionId);
-      await activeCaptureBrokers.get(brokerKey)?.close();
-      activeCaptureBrokers.delete(brokerKey);
-      await ready.store.discard(sessionId);
-      return discarded;
-    },
+    seal: async ({ sessionId }) =>
+      serial(sessionLocks, sessionId, async () => {
+        const ready = await context;
+        const beforeSeal = await ready.store.inspect(sessionId);
+        if ((await currentCaptureStatus(artifactRoot, beforeSeal))?.phase === "failed") {
+          throw new RecordingServiceUnavailableError();
+        }
+        await ensureBroker(artifactRoot, beforeSeal);
+        const inspection = await ready.store.seal(sessionId);
+        const brokerKey = captureBrokerKey(artifactRoot, sessionId);
+        await activeCaptureBrokers.get(brokerKey)?.close();
+        activeCaptureBrokers.delete(brokerKey);
+        const delivery = await renderSealedSession({ artifactRoot, sessionId });
+        if (!delivery.approved || delivery.timingMode !== "broker-receipt-offsets") {
+          throw new Error("sealed capture is not approved for delivery");
+        }
+        return sessionView(
+          inspection,
+          await requestId(inspection),
+          browserHelperRoot,
+          undefined,
+          delivery,
+          await currentCaptureStatus(artifactRoot, inspection),
+        );
+      }),
+    discard: async ({ sessionId }) =>
+      serial(sessionLocks, sessionId, async () => {
+        const ready = await context;
+        const inspection = await ready.store.inspect(sessionId);
+        const discarded = sessionView(
+          inspection,
+          await requestId(inspection),
+          browserHelperRoot,
+          "discarded",
+          undefined,
+          await currentCaptureStatus(artifactRoot, inspection),
+        );
+        const brokerKey = captureBrokerKey(artifactRoot, sessionId);
+        await activeCaptureBrokers.get(brokerKey)?.close();
+        activeCaptureBrokers.delete(brokerKey);
+        await ready.store.discard(sessionId);
+        return discarded;
+      }),
     createProject: async ({ sessionId, projectId, automatedRevisionLimit }) =>
       serial(sessionLocks, sessionId, async () =>
         serial(projectLocks, projectId ?? sessionId, async () => {
@@ -673,8 +976,70 @@ export function createSessionStoreService(
       const stored = await new RecordingProjectStore(artifactRoot, ready.ownerToken).load(
         projectId,
       );
-      return projectView(stored.project, stored.sha256);
+      return projectView(
+        stored.project,
+        stored.sha256,
+        await inspectedPreviewJudgment(artifactRoot, ready.ownerToken, stored.project),
+      );
     },
+    listProfiles: async () => {
+      const ready = await context;
+      const local = await new RecordingProfileStore(artifactRoot, ready.ownerToken).list();
+      return [
+        ...builtInRecordingProfiles(),
+        ...local.map((profile) => ({ ...profile, source: "owner-local" as const })),
+      ]
+        .map(profileSummary)
+        .sort(
+          (left, right) =>
+            left.source.localeCompare(right.source) ||
+            left.profileId.localeCompare(right.profileId),
+        );
+    },
+    getProfile: async ({ source, profileId }) => {
+      const ready = await context;
+      return resolveCanonicalProfile(artifactRoot, ready.ownerToken, { source, profileId });
+    },
+    createProfile: async ({ profileId, snapshot }) => {
+      const ready = await context;
+      const profile = {
+        source: "owner-local" as const,
+        profileId,
+        profileRevision: 1,
+        snapshot,
+        snapshotSha256: profileSnapshotSha256(snapshot),
+      };
+      return new RecordingProfileStore(artifactRoot, ready.ownerToken).create(profile);
+    },
+    updateProfile: async ({ profileId, expectedRevision, expectedSnapshotSha256, snapshot }) => {
+      const ready = await context;
+      const profile = {
+        source: "owner-local" as const,
+        profileId,
+        profileRevision: expectedRevision + 1,
+        snapshot,
+        snapshotSha256: profileSnapshotSha256(snapshot),
+      };
+      return new RecordingProfileStore(artifactRoot, ready.ownerToken).update(profile, {
+        expectedRevision,
+        expectedSnapshotSha256,
+      });
+    },
+    applyProfile: async ({ projectId, projectRevision, profile, mode }) =>
+      serial(projectLocks, projectId, async () => {
+        const ready = await context;
+        const store = new RecordingProjectStore(artifactRoot, ready.ownerToken);
+        const current = await store.load(projectId);
+        if (current.project.revision !== projectRevision)
+          throw new RecordingServiceUnavailableError();
+        const canonical = await resolveCanonicalProfile(artifactRoot, ready.ownerToken, profile);
+        const revised = applyRecordingProfile(current.project, canonical, mode);
+        const stored = await store.replace(revised, {
+          expectedRevision: current.project.revision,
+          expectedSha256: current.sha256,
+        });
+        return projectView(stored.project, stored.sha256);
+      }),
     reviseProject: async ({ project, mode }) => {
       const candidate = validateRecordingProject(project);
       return serial(projectLocks, candidate.projectId, async () => {
@@ -689,6 +1054,160 @@ export function createSessionStoreService(
         return projectView(stored.project, stored.sha256);
       });
     },
+    proposeEditorial: async ({ projectId, projectRevision }) =>
+      serial(projectLocks, projectId, async () => {
+        const ready = await context;
+        const current = await new RecordingProjectStore(artifactRoot, ready.ownerToken).load(
+          projectId,
+        );
+        if (current.project.revision !== projectRevision)
+          throw new RecordingServiceUnavailableError();
+        return canonicalEditorialProposal(artifactRoot, current.project);
+      }),
+    applyAcceptedEditorialProposal: async ({
+      projectId,
+      projectRevision,
+      proposalSha256,
+      acceptedZoomProposalIds,
+    }) =>
+      serial(projectLocks, projectId, async () => {
+        const ready = await context;
+        const store = new RecordingProjectStore(artifactRoot, ready.ownerToken);
+        const current = await store.load(projectId);
+        if (current.project.revision !== projectRevision)
+          throw new RecordingServiceUnavailableError();
+        const proposal = await canonicalEditorialProposal(artifactRoot, current.project);
+        if (proposal.proposalSha256 !== proposalSha256)
+          throw new RecordingServiceUnavailableError();
+        const revised = applyEditorialProposal(current.project, proposal, acceptedZoomProposalIds);
+        const stored = await store.replace(revised, {
+          expectedRevision: current.project.revision,
+          expectedSha256: current.sha256,
+        });
+        return projectView(stored.project, stored.sha256);
+      }),
+    importProjectMedia: async ({ projectId, revision, fileName }) =>
+      serial(projectLocks, projectId, async () => {
+        if (authorizedImportRoot === undefined) throw new RecordingServiceUnavailableError();
+        const ready = await context;
+        const current = await new RecordingProjectStore(artifactRoot, ready.ownerToken).load(
+          projectId,
+        );
+        if (current.project.revision !== revision) throw new RecordingServiceUnavailableError();
+        const libraryRoot = join(artifactRoot, "private-media-library");
+        await mkdir(libraryRoot, { recursive: true, mode: DIRECTORY_MODE });
+        const libraryStatus = await lstat(libraryRoot);
+        if (!libraryStatus.isDirectory() || libraryStatus.isSymbolicLink()) {
+          throw new RecordingServiceUnavailableError();
+        }
+        await chmod(libraryRoot, DIRECTORY_MODE);
+        const library = await createPrivateMediaLibrary({ libraryRoot });
+        const imported = await library.ingest({
+          authorizedRoot: authorizedImportRoot,
+          relativePath: fileName,
+          maximumBytes: 512 * 1024 * 1024,
+        });
+        if (imported.mediaKind === "audio") {
+          const assetRoot = join(artifactRoot, "project-assets");
+          await mkdir(assetRoot, { recursive: true, mode: DIRECTORY_MODE });
+          await chmod(assetRoot, DIRECTORY_MODE);
+          const normalized = await (await createPrivateAudioNormalizer({ libraryRoot })).normalize({
+            media: imported,
+            outputRoot: assetRoot,
+          });
+          await registerProjectAudioAsset({
+            artifactRoot,
+            ownerToken: ready.ownerToken,
+            projectId,
+            assetId: normalized.audioId,
+            sha256: normalized.sha256,
+            relativePath: `${normalized.audioId}.wav`,
+          });
+          return {
+            mediaId: normalized.audioId,
+            sha256: normalized.sha256,
+            kind: "audio" as const,
+            extension: "wav" as const,
+            durationUs: Math.round(normalized.durationSeconds * 1_000_000),
+            sampleRate: normalized.sampleRate,
+            channels: normalized.channels,
+          };
+        }
+        if (imported.mediaKind !== "image" && imported.mediaKind !== "video")
+          throw new RecordingServiceUnavailableError();
+        const adapter = await createPrivateVisualRasterAdapter({ libraryRoot });
+        const inspected = await adapter.inspect({ media: imported });
+        const stored = await new ProjectMediaStore(artifactRoot, ready.ownerToken).save(inspected);
+        return {
+          mediaId: stored.mediaId,
+          sha256: stored.sha256,
+          kind: stored.mediaKind,
+          extension: stored.extension,
+          durationUs: stored.durationUs,
+          width: stored.width,
+          height: stored.height,
+          ...(stored.fps === undefined ? {} : { fps: stored.fps }),
+        };
+      }),
+    inspectPreview: async ({ projectId, revision }) =>
+      serial(projectLocks, projectId, async () => {
+        const ready = await context;
+        const current = await new RecordingProjectStore(artifactRoot, ready.ownerToken).load(
+          projectId,
+        );
+        if (
+          current.project.revision !== revision ||
+          current.project.preview.status !== "ready" ||
+          current.project.preview.revision !== current.project.revision
+        ) {
+          throw new RecordingServiceUnavailableError();
+        }
+        return inspectPrivatePreview({
+          artifactRoot,
+          relativePath: previewArtifactRelativePath(current.project),
+          projectId,
+          revision,
+          projectSha256: current.sha256,
+        });
+      }),
+    judgePreview: async ({
+      projectId,
+      revision,
+      projectSha256,
+      previewArtifactSha256,
+      verdict,
+      issues,
+    }) =>
+      serial(projectLocks, projectId, async () => {
+        const ready = await context;
+        const current = await new RecordingProjectStore(artifactRoot, ready.ownerToken).load(
+          projectId,
+        );
+        if (
+          current.project.revision !== revision ||
+          current.project.preview.status !== "ready" ||
+          current.project.preview.revision !== current.project.revision
+        ) {
+          throw new RecordingServiceUnavailableError();
+        }
+        const artifactDigest = await previewArtifactDigest(artifactRoot, current.project);
+        if (current.sha256 !== projectSha256 || artifactDigest !== previewArtifactSha256) {
+          throw new RecordingServiceUnavailableError();
+        }
+        const judgment = await new PreviewJudgmentStore(artifactRoot, ready.ownerToken).create({
+          schemaVersion: 1,
+          projectId,
+          revision,
+          ...previewJudgmentDigests(current.project),
+          previewArtifactSha256: artifactDigest,
+          verdict,
+          issues,
+        });
+        return projectView(current.project, current.sha256, {
+          ...previewJudgmentSummary(judgment, current.project),
+          status: "current",
+        });
+      }),
     renderProject: async ({ projectId, revision, kind }) =>
       serial(projectLocks, projectId, async () => {
         const ready = await context;
@@ -701,6 +1220,21 @@ export function createSessionStoreService(
             current.project.preview.revision !== current.project.revision)
         ) {
           throw new RecordingServiceUnavailableError();
+        }
+        if (kind === "final") {
+          const judgmentStore = new PreviewJudgmentStore(artifactRoot, ready.ownerToken);
+          const recorded = await judgmentStore.load(
+            current.project.projectId,
+            current.project.revision,
+          );
+          if (current.project.schemaVersion === 2 || recorded !== undefined) {
+            await judgmentStore.assertAccepted({
+              projectId: current.project.projectId,
+              revision: current.project.revision,
+              ...previewJudgmentDigests(current.project),
+              previewArtifactSha256: await previewArtifactDigest(artifactRoot, current.project),
+            });
+          }
         }
         const extension = current.project.output.format;
         const artifact = `projects/renders/${projectId}-r${revision}-${kind}.${extension}`;
@@ -729,15 +1263,26 @@ export function createSessionStoreService(
             ownerToken: ready.ownerToken,
             project: current.project,
           });
-          await renderRecordingProject({
+          const visual = await resolveProjectVisualSources({
+            artifactRoot,
+            ownerToken: ready.ownerToken,
             project: current.project,
-            sources,
-            assetRoot: assets.assetRoot,
-            assets: assets.assets,
-            outputPath: publication.temporaryPath,
-            ...(current.project.presentation.cursor.visible ? { cursorTrack } : {}),
-            ...(current.project.presentation.cursor.clickEffect !== "none" ? { clickTrack } : {}),
           });
+          try {
+            await renderRecordingProject({
+              project: current.project,
+              sources,
+              visualSources: visual.sources,
+              assetRoot: assets.assetRoot,
+              assets: assets.assets,
+              outputPath: publication.temporaryPath,
+              ...(current.project.presentation.cursor.visible ? { cursorTrack } : {}),
+              ...(current.project.presentation.cursor.clickEffect !== "none" ? { clickTrack } : {}),
+            });
+          } finally {
+            // Integrity verification happens in dispose; it must complete before publication.
+            await visual.dispose();
+          }
           const artifactDigest = sha256(await readFile(publication.temporaryPath));
           const updated = validateRecordingProject({
             ...current.project,

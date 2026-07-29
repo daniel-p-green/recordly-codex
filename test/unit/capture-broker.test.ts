@@ -13,7 +13,14 @@ afterEach(async () => {
   await Promise.all(roots.splice(0).map((root) => rm(root, { recursive: true, force: true })));
 });
 
-async function broker(clockUs?: () => number) {
+async function broker(
+  input: {
+    clockUs?: () => number;
+    maxCaptureSeconds?: number;
+    maxAcceptedFrames?: number;
+    maxAcceptedBytes?: number;
+  } = {},
+) {
   const root = await mkdtemp(join(tmpdir(), "recordly-codex-broker-"));
   roots.push(root);
   const phases: string[] = [];
@@ -21,7 +28,14 @@ async function broker(clockUs?: () => number) {
     sessionId: "session-001",
     root,
     origin: "https://recordly.dev",
-    ...(clockUs === undefined ? {} : { clockUs }),
+    ...(input.clockUs === undefined ? {} : { clockUs: input.clockUs }),
+    ...(input.maxCaptureSeconds === undefined
+      ? {}
+      : { maxCaptureSeconds: input.maxCaptureSeconds }),
+    ...(input.maxAcceptedFrames === undefined
+      ? {}
+      : { maxAcceptedFrames: input.maxAcceptedFrames }),
+    ...(input.maxAcceptedBytes === undefined ? {} : { maxAcceptedBytes: input.maxAcceptedBytes }),
     onPhase: async (phase) => {
       phases.push(phase);
     },
@@ -176,8 +190,8 @@ describe("loopback capture broker", () => {
   });
 
   it("rejects observed events before a durable baseline frame, then aligns later events", async () => {
-    const samples = [100, 200, 250, 300];
-    const { phases, instance, post } = await broker(() => samples.shift() ?? 300);
+    const samples = [100, 200, 300, 400, 450, 500];
+    const { phases, instance, post } = await broker({ clockUs: () => samples.shift() ?? 300 });
     try {
       const claim = await post("/claim", identity);
       const token = ((await claim.json()) as { token: string }).token;
@@ -196,7 +210,7 @@ describe("loopback capture broker", () => {
       await instance.close();
     }
 
-    const aligned = await broker(() => samples.shift() ?? 300);
+    const aligned = await broker({ clockUs: () => samples.shift() ?? 300 });
     try {
       const claim = await aligned.post("/claim", identity);
       const alignedToken = ((await claim.json()) as { token: string }).token;
@@ -244,7 +258,9 @@ describe("loopback capture broker", () => {
 
   it("coalesces bounded scroll observations and fails closed for malformed or flooding pages", async () => {
     const samples = Array.from({ length: 140 }, (_, index) => 1_000 + index);
-    const { root, phases, instance, post } = await broker(() => samples.shift() ?? 2_000);
+    const { root, phases, instance, post } = await broker({
+      clockUs: () => samples.shift() ?? 2_000,
+    });
     try {
       const claim = await post("/claim", identity);
       const token = ((await claim.json()) as { token: string }).token;
@@ -283,7 +299,9 @@ describe("loopback capture broker", () => {
 
   it("coalesces privacy-bounded pointer observations and drains the final sample on stop", async () => {
     const samples = [1_000, 1_010, 1_020, 1_030];
-    const { root, phases, instance, post } = await broker(() => samples.shift() ?? 1_040);
+    const { root, phases, instance, post } = await broker({
+      clockUs: () => samples.shift() ?? 1_040,
+    });
     try {
       const claim = await post("/claim", identity);
       const token = ((await claim.json()) as { token: string }).token;
@@ -336,7 +354,7 @@ describe("loopback capture broker", () => {
 
   it("fails closed for malformed pointer state and pointer floods", async () => {
     let sample = 5_000;
-    const { phases, instance, post } = await broker(() => sample++);
+    const { phases, instance, post } = await broker({ clockUs: () => sample++ });
     try {
       const claim = await post("/claim", identity);
       const token = ((await claim.json()) as { token: string }).token;
@@ -359,7 +377,7 @@ describe("loopback capture broker", () => {
     }
 
     let floodSample = 8_000;
-    const flooded = await broker(() => floodSample++);
+    const flooded = await broker({ clockUs: () => floodSample++ });
     try {
       const claim = await flooded.post("/claim", identity);
       const token = ((await claim.json()) as { token: string }).token;
@@ -380,7 +398,7 @@ describe("loopback capture broker", () => {
 
   it("fails closed when observed-event rate exceeds the bounded broker window", async () => {
     let sample = 5_000;
-    const { phases, instance, post } = await broker(() => sample++);
+    const { phases, instance, post } = await broker({ clockUs: () => sample++ });
     try {
       const claim = await post("/claim", identity);
       const token = ((await claim.json()) as { token: string }).token;
@@ -457,7 +475,7 @@ describe("loopback capture broker", () => {
 
   it("persists strictly monotonic receipt offsets from the broker clock, never page timing", async () => {
     const samples = [2_000, 2_000, 1_999];
-    const { root, instance, post } = await broker(() => samples.shift() ?? 1_999);
+    const { root, instance, post } = await broker({ clockUs: () => samples.shift() ?? 1_999 });
     try {
       const claim = await post("/claim", identity);
       const token = ((await claim.json()) as { token: string }).token;
@@ -488,7 +506,10 @@ describe("loopback capture broker", () => {
   });
 
   it("fails closed when the local receipt clock is invalid", async () => {
-    const { phases, root, instance, post } = await broker(() => -1);
+    const samples = [100, -1];
+    const { phases, root, instance, post } = await broker({
+      clockUs: () => samples.shift() ?? -1,
+    });
     try {
       const claim = await post("/claim", identity);
       const token = ((await claim.json()) as { token: string }).token;
@@ -606,6 +627,167 @@ describe("loopback capture broker", () => {
       );
       expect(stopped.status).toBe(200);
       expect((await post("/claim", identity)).status).toBe(409);
+    } finally {
+      await instance.close();
+    }
+  });
+
+  it("fails closed with a persisted budget_exceeded summary before accepting over-budget frames", async () => {
+    const samples = [1_000, 1_000, 2_000_001];
+    const { root, phases, instance, post } = await broker({
+      clockUs: () => samples.shift() ?? 2_000_001,
+      maxCaptureSeconds: 1,
+      maxAcceptedFrames: 1,
+      maxAcceptedBytes: 64,
+    });
+    try {
+      const claim = await post("/claim", identity);
+      const token = ((await claim.json()) as { token: string }).token;
+      expect((await post("/frame", framePayload(1), token)).status).toBe(200);
+      expect((await post("/frame", framePayload(2), token)).status).toBe(429);
+      expect(phases.at(-1)).toBe("failed");
+      expect(JSON.parse(await readFile(join(root, "capture-summary.json"), "utf8"))).toMatchObject({
+        status: "failed",
+        reason: "budget_exceeded",
+        acceptedFrames: 1,
+      });
+      expect(instance.status()).toMatchObject({
+        phase: "failed",
+        reason: "budget_exceeded",
+        acceptedFrames: 1,
+      });
+      expect((await post("/frame", framePayload(3), token)).status).toBe(429);
+    } finally {
+      await instance.close();
+    }
+  });
+
+  it("expires a claimed capture before its first frame when the broker-owned deadline passes", async () => {
+    const samples = [1_000, 1_001_001];
+    const { root, instance, post } = await broker({
+      clockUs: () => samples.shift() ?? 1_001_001,
+      maxCaptureSeconds: 1,
+    });
+    try {
+      const token = (
+        (await post("/claim", identity).then((response) => response.json())) as {
+          token: string;
+        }
+      ).token;
+      expect((await post("/frame", framePayload(1), token)).status).toBe(429);
+      expect(JSON.parse(await readFile(join(root, "capture-summary.json"), "utf8"))).toMatchObject({
+        status: "failed",
+        reason: "budget_exceeded",
+        acceptedFrames: 0,
+      });
+    } finally {
+      await instance.close();
+    }
+  });
+
+  it("rejects stop after the broker-owned deadline even when no later frame arrives", async () => {
+    const samples = [1_000, 1_100, 1_001_101];
+    const { root, instance, post } = await broker({
+      clockUs: () => samples.shift() ?? 1_001_101,
+      maxCaptureSeconds: 1,
+    });
+    try {
+      const token = (
+        (await post("/claim", identity).then((response) => response.json())) as {
+          token: string;
+        }
+      ).token;
+      expect((await post("/frame", framePayload(1), token)).status).toBe(200);
+      const stopped = await post(
+        "/stop",
+        {
+          ...identity,
+          receivedFrames: 1,
+          acceptedFrames: 1,
+          ackedFrames: 1,
+          rejectedFrames: 0,
+          degradationRequested: false,
+        },
+        token,
+      );
+      expect(stopped.status).toBe(429);
+      expect(JSON.parse(await readFile(join(root, "capture-summary.json"), "utf8"))).toMatchObject({
+        status: "failed",
+        reason: "budget_exceeded",
+        acceptedFrames: 1,
+      });
+      expect(instance.status()).toMatchObject({
+        phase: "failed",
+        reason: "budget_exceeded",
+        acceptedFrames: 1,
+      });
+    } finally {
+      await instance.close();
+    }
+  });
+
+  it("enforces receipt-time and accepted-byte budgets independently of the frame cap", async () => {
+    const timed = await broker({
+      clockUs: (() => {
+        const values = [1_000, 1_001, 1_001_001];
+        return () => values.shift() ?? 1_001_001;
+      })(),
+      maxCaptureSeconds: 1,
+      maxAcceptedFrames: 4,
+      maxAcceptedBytes: 1_000,
+    });
+    try {
+      const token = (
+        (await timed.post("/claim", identity).then((response) => response.json())) as {
+          token: string;
+        }
+      ).token;
+      expect((await timed.post("/frame", framePayload(1), token)).status).toBe(200);
+      expect((await timed.post("/frame", framePayload(2), token)).status).toBe(429);
+      expect(
+        JSON.parse(await readFile(join(timed.root, "capture-summary.json"), "utf8")),
+      ).toMatchObject({
+        reason: "budget_exceeded",
+        acceptedFrames: 1,
+      });
+    } finally {
+      await timed.instance.close();
+    }
+
+    const byteBounded = await broker({ maxAcceptedFrames: 4, maxAcceptedBytes: 1 });
+    try {
+      const token = (
+        (await byteBounded.post("/claim", identity).then((response) => response.json())) as {
+          token: string;
+        }
+      ).token;
+      expect((await byteBounded.post("/frame", framePayload(1), token)).status).toBe(429);
+      expect(
+        JSON.parse(await readFile(join(byteBounded.root, "capture-summary.json"), "utf8")),
+      ).toMatchObject({ reason: "budget_exceeded", acceptedFrames: 0 });
+    } finally {
+      await byteBounded.instance.close();
+    }
+  });
+
+  it("fails closed when concurrent frame submissions race a capture budget", async () => {
+    const { root, instance, post } = await broker({ maxAcceptedFrames: 1 });
+    try {
+      const token = (
+        (await post("/claim", identity).then((response) => response.json())) as {
+          token: string;
+        }
+      ).token;
+      const responses = await Promise.all(
+        [1, 2].map((sequence) => post("/frame", framePayload(sequence), token)),
+      );
+      expect(responses.filter((response) => response.status === 200)).toHaveLength(1);
+      expect(responses.filter((response) => response.status === 429)).toHaveLength(1);
+      expect(JSON.parse(await readFile(join(root, "capture-summary.json"), "utf8"))).toMatchObject({
+        status: "failed",
+        reason: "budget_exceeded",
+        acceptedFrames: 1,
+      });
     } finally {
       await instance.close();
     }

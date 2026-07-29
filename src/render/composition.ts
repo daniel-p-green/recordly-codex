@@ -62,6 +62,47 @@ export type SourceClip = {
   transitionAfter?: { kind: "cut" | "crossfade"; durationUs: number };
 };
 
+export type ReviewedTransition = {
+  clipId: string;
+  family:
+    | "cut"
+    | "crossfade"
+    | "dip-to-color"
+    | "wipe-left"
+    | "wipe-right"
+    | "slide-left"
+    | "slide-right";
+  durationUs: number;
+  easing: "linear" | "ease-in-out" | "ease-out";
+  color?: string;
+};
+
+export type VisualTrack = {
+  id: string;
+  mediaId: string;
+  media: {
+    kind: "image" | "video";
+    durationUs: number;
+    width?: number;
+    height?: number;
+  };
+  clipId: string;
+  startUs: number;
+  endUs: number;
+  mediaTrim: { startUs: number; endUs: number };
+  sync: "source-time" | "output-time";
+  layout: {
+    position: "top-left" | "top-right" | "bottom-left" | "bottom-right";
+    scale: number;
+    fit: "contain" | "cover";
+    crop: "none" | { x: number; y: number; width: number; height: number };
+    opacity: number;
+    radiusPx: number;
+    border: "none" | "light" | "strong";
+  };
+  motion: { preset: "none" | "fade" | "pop"; durationUs: number };
+};
+
 export type CompositionSource = {
   width: number;
   height: number;
@@ -87,6 +128,8 @@ export type CompositionInput = {
   cursorVisible?: boolean;
   clickTrack?: readonly ClickSample[];
   zoomRegions?: readonly ZoomRegion[];
+  /** V2 reviewed proposals may request up to 4x; the V1 public default remains 2x. */
+  maxZoomScale?: 2 | 4;
   captions?: readonly Caption[];
   annotations?: readonly Annotation[];
   audioTracks?: readonly {
@@ -111,6 +154,21 @@ export type CompositionInput = {
     padding: number;
     radius: number;
     shadow: "none" | "soft" | "strong";
+  };
+  /**
+   * V2-only presentation controls. V1 callers omit this field and retain the
+   * original composition recipe exactly.
+   */
+  presentationControls?: PresentationControls;
+};
+
+export type PresentationControls = {
+  cursor: { emphasis: "none" | "spotlight" | "trail"; trailDurationUs: number };
+  frame: { fit: "contain" | "cover"; border: "none" | "subtle" | "strong" };
+  export: {
+    audio: "include" | "mute";
+    colorRange: "limited";
+    metadata: "none" | "minimal";
   };
 };
 
@@ -149,6 +207,10 @@ export type CompositionPlan = {
   style: ResolvedRenderStyle;
   sourceGeometries: CompositionSourceGeometry[];
   clips: SourceClip[];
+  /** Present only for a validated V2 project. V1 keeps its legacy compositor path. */
+  reviewedTransitions?: ReviewedTransition[];
+  /** Path-free V2 overlay declarations; decoded sources are resolved separately by media ID. */
+  visualTracks?: VisualTrack[];
   captions: Caption[];
   annotations: Annotation[];
   audioTracks: Array<{
@@ -168,6 +230,8 @@ export type CompositionPlan = {
     scale: number;
   }>;
   hooks: RenderHook[];
+  /** Defined only for validated V2 input. Its absence is the V1 compatibility boundary. */
+  presentationControls?: PresentationControls;
   cursorVisible: boolean;
   clickEffects: Array<
     CompositionPoint & {
@@ -180,6 +244,13 @@ export type CompositionPlan = {
   >;
   cursorAt: (tUs: number) => CursorSample | undefined;
   cursorAtSource?: (sourceId: string, sourceTimeUs: number) => CursorSample | undefined;
+  /** Bounded observed-only samples for an optional V2 cursor trail. */
+  cursorHistoryAt?: (tUs: number, durationUs: number) => readonly CursorSample[];
+  cursorHistoryAtSource?: (
+    sourceId: string,
+    sourceTimeUs: number,
+    durationUs: number,
+  ) => readonly CursorSample[];
   zoomAt: (
     tUs: number,
     clipId?: string,
@@ -407,6 +478,42 @@ export function mapPresentationTimeline(input: {
   return { durationUs: Math.round(presentationStartUs), segments };
 }
 
+function resolvePresentationControls(
+  value: PresentationControls | undefined,
+): PresentationControls | undefined {
+  if (value === undefined) return undefined;
+  const { cursor, frame, export: exportControls } = value;
+  if (
+    !["none", "spotlight", "trail"].includes(cursor.emphasis) ||
+    !Number.isSafeInteger(cursor.trailDurationUs) ||
+    cursor.trailDurationUs < 0 ||
+    cursor.trailDurationUs > 1_000_000 ||
+    (cursor.emphasis === "trail") !== cursor.trailDurationUs > 0 ||
+    !["contain", "cover"].includes(frame.fit) ||
+    !["none", "subtle", "strong"].includes(frame.border) ||
+    !["include", "mute"].includes(exportControls.audio) ||
+    exportControls.colorRange !== "limited" ||
+    !["none", "minimal"].includes(exportControls.metadata)
+  ) {
+    throw new RangeError("presentation controls are invalid");
+  }
+  return structuredClone(value);
+}
+
+function boundedCursorHistory(
+  values: readonly CursorSample[],
+  sourceTimeUs: number,
+  durationUs: number,
+): readonly CursorSample[] {
+  if (!Number.isSafeInteger(sourceTimeUs) || !Number.isSafeInteger(durationUs) || durationUs < 1)
+    return [];
+  const earliest = sourceTimeUs - durationUs;
+  const matching = values.filter((sample) => sample.tUs >= earliest && sample.tUs <= sourceTimeUs);
+  // A trail is a visual accent, not an unbounded evidence cache. Keep the most
+  // recent observed samples in their original deterministic order.
+  return matching.slice(-96);
+}
+
 export function buildCompositionPlan(input: CompositionInput): CompositionPlan {
   if (input.schemaVersion !== 1) throw new RangeError("composition schema is unsupported");
   finite(input.source.width, "source width", 1);
@@ -489,13 +596,14 @@ export function buildCompositionPlan(input: CompositionInput): CompositionPlan {
     if (click.button !== 0 && click.button !== 1 && click.button !== 2)
       throw new RangeError("click button");
   }
+  const maxZoomScale = input.maxZoomScale ?? 2;
   const zoomRegions = sorted(input.zoomRegions ?? [], "zoom region");
   for (const region of zoomRegions) {
     boundedId(region.id, "zoom region ID");
     finite(region.x, "zoom x", -1_000_000);
     finite(region.y, "zoom y", -1_000_000);
-    if (region.scale !== undefined && (region.scale < 1 || region.scale > 2)) {
-      throw new RangeError("zoom scale must be between 1 and 2");
+    if (region.scale !== undefined && (region.scale < 1 || region.scale > maxZoomScale)) {
+      throw new RangeError(`zoom scale must be between 1 and ${maxZoomScale}`);
     }
   }
   const validateOverlay = (overlay: Caption | Annotation, label: string): void => {
@@ -540,6 +648,7 @@ export function buildCompositionPlan(input: CompositionInput): CompositionPlan {
     fps: Math.round(input.source.fps),
     quality: "standard" as const,
   };
+  const presentationControls = resolvePresentationControls(input.presentationControls);
   const clickEffect = style.cursor.clickEffect;
   const clickEffects =
     clickEffect === "none"
@@ -563,9 +672,11 @@ export function buildCompositionPlan(input: CompositionInput): CompositionPlan {
     audioTracks,
     pipTracks,
     hooks: resolveRenderHooks(input.hooks),
+    ...(presentationControls === undefined ? {} : { presentationControls }),
     cursorVisible: input.cursorVisible ?? true,
     clickEffects,
     cursorAt: (tUs) => interpolateCursor(cursorTrack, tUs, style.cursor.smoothing > 0),
+    cursorHistoryAt: (tUs, durationUs) => boundedCursorHistory(cursorTrack, tUs, durationUs),
     zoomAt: (tUs, clipId, clipSourceTimeUs) =>
       zoomAt(zoomRegions, style, tUs, clipId, clipSourceTimeUs),
   };
@@ -617,7 +728,64 @@ export function buildCompositionPlanFromProject(
     speedRegions: clip.speedRegions,
     ...(clip.transitionAfter === undefined ? {} : { transitionAfter: clip.transitionAfter }),
   }));
-  const zoomRegions = input.timeline.clips.flatMap((clip) => {
+  type V2ProjectExtensions = {
+    presentationControls?: PresentationControls;
+    media?: {
+      assets?: readonly {
+        id: string;
+        kind: "audio" | "image" | "video";
+        durationUs: number;
+        width?: number;
+        height?: number;
+      }[];
+    };
+    visualTracks?: readonly Omit<VisualTrack, "media">[];
+    timelineTransitions?: readonly ReviewedTransition[];
+    zoomProposals?: readonly {
+      id: string;
+      clipId: string;
+      sourceRange: { startUs: number; endUs: number };
+      focus: { x: number; y: number };
+      scale: number;
+      easing: "linear" | "ease-in-out" | "ease-out";
+      review: { status: "proposed" | "accepted" | "rejected" };
+    }[];
+  };
+  const v2 = input as ProjectRenderInput & V2ProjectExtensions;
+  const reviewedTransitions =
+    Array.isArray(v2.timelineTransitions) &&
+    Array.isArray(v2.zoomProposals) &&
+    Array.isArray(v2.visualTracks) &&
+    Array.isArray(v2.media?.assets)
+      ? [...v2.timelineTransitions]
+      : undefined;
+  if (reviewedTransitions !== undefined && v2.presentationControls === undefined)
+    throw new RangeError("V2 project presentation controls are unavailable");
+  if (
+    reviewedTransitions !== undefined &&
+    v2.presentationControls?.cursor.emphasis !== "none" &&
+    !input.presentation.cursor.visible
+  ) {
+    throw new RangeError("V2 cursor emphasis requires an observed visible cursor");
+  }
+  const visualTracks =
+    reviewedTransitions === undefined
+      ? undefined
+      : (v2.visualTracks ?? []).map((track) => {
+          const media = v2.media?.assets?.find((asset) => asset.id === track.mediaId);
+          if (media === undefined || (media.kind !== "image" && media.kind !== "video"))
+            throw new RangeError("visual track media is unavailable");
+          return {
+            ...track,
+            media: {
+              kind: media.kind,
+              durationUs: media.durationUs,
+              ...(media.width === undefined ? {} : { width: media.width }),
+              ...(media.height === undefined ? {} : { height: media.height }),
+            },
+          };
+        });
+  const legacyZoomRegions = input.timeline.clips.flatMap((clip) => {
     const geometry = sourceGeometries.find((candidate) => candidate.id === clip.sourceId);
     if (geometry === undefined) throw new RangeError("zoom clip source is unavailable");
     return clip.zoomRegions.map((region) => ({
@@ -633,6 +801,29 @@ export function buildCompositionPlanFromProject(
       easing: region.easing,
     }));
   });
+  const zoomRegions =
+    reviewedTransitions === undefined
+      ? legacyZoomRegions
+      : (v2.zoomProposals ?? [])
+          .filter((proposal) => proposal.review.status === "accepted")
+          .map((proposal) => {
+            const clip = input.timeline.clips.find((candidate) => candidate.id === proposal.clipId);
+            if (clip === undefined) throw new RangeError("reviewed zoom clip is unavailable");
+            const geometry = sourceGeometries.find((candidate) => candidate.id === clip.sourceId);
+            if (geometry === undefined) throw new RangeError("reviewed zoom source is unavailable");
+            return {
+              id: proposal.id,
+              tUs: Math.round((proposal.sourceRange.startUs + proposal.sourceRange.endUs) / 2),
+              clipId: proposal.clipId,
+              x: proposal.focus.x * geometry.width,
+              y: proposal.focus.y * geometry.height,
+              scale: proposal.scale,
+              startUs: proposal.sourceRange.startUs,
+              endUs: proposal.sourceRange.endUs,
+              mode: "manual" as const,
+              easing: proposal.easing,
+            };
+          });
   const geometryForClip = (clipId: string): CompositionSourceGeometry => {
     const sourceId = input.timeline.clips.find((clip) => clip.id === clipId)?.sourceId;
     const geometry = sourceGeometries.find((candidate) => candidate.id === sourceId);
@@ -670,6 +861,8 @@ export function buildCompositionPlanFromProject(
     profile,
     format: input.output.format,
     zoomRegions,
+    ...(reviewedTransitions === undefined ? {} : { maxZoomScale: 4 as const }),
+    ...(reviewedTransitions === undefined ? {} : { presentationControls: v2.presentationControls }),
     cursorVisible: input.presentation.cursor.visible,
     captions,
     annotations,
@@ -757,6 +950,8 @@ export function buildCompositionPlanFromProject(
       sourceTimeUs,
       plan.style.cursor.smoothing > 0,
     );
+  plan.cursorHistoryAtSource = (sourceId, sourceTimeUs, durationUs) =>
+    boundedCursorHistory(cursorBySource.get(sourceId) ?? [], sourceTimeUs, durationUs);
   const schedule = buildClipSchedule(plan);
   plan.clickEffects =
     projectClickEffect === "none"
@@ -800,5 +995,10 @@ export function buildCompositionPlanFromProject(
   if (projectClickEffect !== "none" && plan.clickEffects.length === 0) {
     throw new RangeError("click evidence does not intersect a rendered clip");
   }
-  return { ...plan, output: { ...plan.output, quality: input.output.quality } };
+  return {
+    ...plan,
+    ...(reviewedTransitions === undefined ? {} : { reviewedTransitions }),
+    ...(visualTracks === undefined ? {} : { visualTracks }),
+    output: { ...plan.output, quality: input.output.quality },
+  };
 }

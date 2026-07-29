@@ -22,7 +22,7 @@ import { createSessionStoreService } from "../../mcp/session-store-service.js";
 import type { RecordingSessionService, RecordingSessionView } from "../../mcp/types.js";
 
 const execFileAsync = promisify(execFile);
-const browserHelperRoot = join(process.cwd(), ".playwright-mcp", "recordly-codex");
+const browserHelperRoot = "/tmp/recordly-codex/browser-helpers";
 
 async function rawJsonRpcOutput(): Promise<{ lines: string[]; stderr: string }> {
   const child = spawn(process.execPath, ["./dist/mcp/server.js"], { cwd: process.cwd() });
@@ -102,11 +102,181 @@ const session: RecordingSessionView = {
   status: "open",
   eventCount: 0,
   artifactRoot: "/tmp/recordly-codex/session-001",
+  browserHelperRoot,
   browserStartHelperPath: `${browserHelperRoot}/session-001/browser-start.mjs`,
   browserStopHelperPath: `${browserHelperRoot}/session-001/browser-stop.mjs`,
   captureConfigPath: "/tmp/recordly-codex/session-001/capture-config.json",
   artifactPaths: ["/tmp/recordly-codex/session-001/request.sanitized.json", "/private/secret.json"],
 };
+
+const schemaSession = {
+  sessionId: "session-001",
+  requestId: "request-001",
+  status: "open",
+  eventCount: 0,
+  artifactRoot: "/tmp/recordly-codex/session-001",
+  browserStartHelperPath: `${browserHelperRoot}/session-001/browser-start.mjs`,
+  browserStopHelperPath: `${browserHelperRoot}/session-001/browser-stop.mjs`,
+  captureConfigPath: "/tmp/recordly-codex/session-001/capture-config.json",
+  artifactPaths: ["/tmp/recordly-codex/session-001/request.sanitized.json"],
+};
+const schemaProject = { project: { projectId: "project-001" }, projectSha256: "a".repeat(64) };
+const schemaRender = {
+  revision: 0,
+  format: "mp4" as const,
+  artifact: "projects/project-001/preview.mp4",
+  sha256: "b".repeat(64),
+};
+const schemaJudgment = {
+  status: "current" as const,
+  verdict: "accept" as const,
+  revision: 0,
+  issues: [],
+  remainingAutomatedRevisionBudget: 4,
+};
+const schemaProfile = {
+  source: "builtin" as const,
+  profileId: "landscape-1080p",
+  profileRevision: 1,
+  snapshot: {},
+  snapshotSha256: "c".repeat(64),
+};
+const schemaProfileSummary = {
+  source: schemaProfile.source,
+  profileId: schemaProfile.profileId,
+  profileRevision: schemaProfile.profileRevision,
+  snapshotSha256: schemaProfile.snapshotSha256,
+};
+
+describe("MCP tool output contract", () => {
+  it("accepts each declared successful operation shape", () => {
+    const validSuccesses = [
+      ...[
+        "create_recording_session",
+        "record_browser_event",
+        "inspect_recording_session",
+        "seal_recording_capture",
+        "discard_recording_session",
+      ].map((operation) => ({ ok: true, operation, session: schemaSession })),
+      ...[
+        "create_recording_project",
+        "inspect_recording_project",
+        "revise_recording_project",
+        "apply_recording_profile",
+        "apply_accepted_recording_project_editorial",
+      ].map((operation) => ({ ok: true, operation, project: schemaProject })),
+      {
+        ok: true,
+        operation: "render_recording_project_preview",
+        project: schemaProject,
+        render: { ...schemaRender, kind: "preview" as const },
+      },
+      {
+        ok: true,
+        operation: "render_recording_project_final",
+        project: schemaProject,
+        render: { ...schemaRender, kind: "final" as const },
+      },
+      {
+        ok: true,
+        operation: "judge_recording_project_preview",
+        project: schemaProject,
+        judgment: schemaJudgment,
+      },
+      {
+        ok: true,
+        operation: "import_recording_project_media",
+        media: {
+          mediaId: "media_0123456789abcdef0123456789abcdef",
+          sha256: "d".repeat(64),
+          kind: "image",
+          extension: "png",
+          durationUs: 1,
+        },
+      },
+      { ok: true, operation: "list_recording_profiles", profiles: [schemaProfileSummary] },
+      ...["get_recording_profile", "create_recording_profile", "update_recording_profile"].map(
+        (operation) => ({ ok: true, operation, profile: schemaProfile }),
+      ),
+    ];
+
+    for (const output of validSuccesses) {
+      expect(toolOutputSchema.safeParse(output).success, JSON.stringify(output)).toBe(true);
+    }
+  });
+
+  it("rejects successful payloads that do not belong to their declared operation", () => {
+    const malformedSuccesses = [
+      {
+        ok: true,
+        operation: "judge_recording_project_preview",
+      },
+      {
+        ok: true,
+        operation: "render_recording_project_preview",
+        project: schemaProject,
+      },
+      {
+        ok: true,
+        operation: "render_recording_project_final",
+        project: schemaProject,
+      },
+      {
+        ok: true,
+        operation: "render_recording_project_preview",
+        project: schemaProject,
+        render: { ...schemaRender, kind: "final" as const },
+      },
+      {
+        ok: true,
+        operation: "judge_recording_project_preview",
+        project: schemaProject,
+        judgment: schemaJudgment,
+        render: { ...schemaRender, kind: "preview" as const },
+      },
+      {
+        ok: true,
+        operation: "inspect_recording_session",
+        session: schemaSession,
+        project: schemaProject,
+      },
+      {
+        ok: true,
+        operation: "list_recording_profiles",
+        profiles: [schemaProfileSummary],
+        project: schemaProject,
+      },
+      {
+        ok: true,
+        operation: "get_recording_profile",
+        profile: schemaProfile,
+        render: { ...schemaRender, kind: "preview" as const },
+      },
+      {
+        ok: true,
+        operation: "create_recording_profile",
+        profile: schemaProfile,
+        media: {
+          mediaId: "media_0123456789abcdef0123456789abcdef",
+          sha256: "d".repeat(64),
+          kind: "image",
+          extension: "png",
+          durationUs: 1,
+        },
+      },
+      {
+        ok: true,
+        operation: "update_recording_profile",
+        profile: schemaProfile,
+        session: schemaSession,
+      },
+    ];
+
+    for (const output of malformedSuccesses) {
+      expect(toolOutputSchema.safeParse(output).success, JSON.stringify(output)).toBe(false);
+    }
+  });
+});
 
 describe("recordly Codex MCP handlers", () => {
   it("accepts ergonomic intent, restricts events to semantic actions, and returns only owned paths", async () => {
@@ -167,6 +337,12 @@ describe("recordly Codex MCP handlers", () => {
     expect(
       createRecordingSessionInputSchema.safeParse({ ...createInput, requestId: "model-supplied" })
         .success,
+    ).toBe(false);
+    expect(
+      createRecordingSessionInputSchema.safeParse({
+        ...createInput,
+        allowedOrigins: ["https://demo.example", "https://other.example"],
+      }).success,
     ).toBe(false);
   });
 
@@ -307,10 +483,10 @@ describe("recordly Codex MCP handlers", () => {
       expect(events.every((event) => event.sessionId === created.sessionId)).toBe(true);
       expect(inspected.artifactRoot).toBe(created.artifactRoot);
       expect(inspected.browserStartHelperPath).toBe(
-        `${browserHelperRoot}/${created.sessionId}/browser-start.mjs`,
+        `${artifactRoot}/browser-helpers/${created.sessionId}/browser-start.mjs`,
       );
       expect(inspected.browserStopHelperPath).toBe(
-        `${browserHelperRoot}/${created.sessionId}/browser-stop.mjs`,
+        `${artifactRoot}/browser-helpers/${created.sessionId}/browser-stop.mjs`,
       );
       expect(inspected.captureConfigPath.startsWith(`${created.artifactRoot}/`)).toBe(true);
       expect(
@@ -326,6 +502,93 @@ describe("recordly Codex MCP handlers", () => {
     expect(() => createSessionStoreService({ artifactRoot: "/" })).toThrow(
       "recording session service is unavailable",
     );
+  });
+
+  it("creates one canonical approved origin with broker-owned capture limits below the renderer cap", async () => {
+    const artifactRoot = await mkdtemp(join(tmpdir(), "recordly-codex-origin-"));
+    try {
+      const service = createSessionStoreService({ artifactRoot, idSource: () => "session-origin" });
+      const created = await service.create({
+        url: "https://DEMO.example:443/products",
+        objective: "Show the approved opening state.",
+        maxCaptureSeconds: 60,
+        maxAcceptedFrames: 900,
+        maxAcceptedBytes: 4 * 1024 * 1024,
+      });
+
+      expect(created.capture).toEqual({
+        phase: "ready",
+        maxCaptureSeconds: 60,
+        maxAcceptedFrames: 900,
+        maxAcceptedBytes: 4 * 1024 * 1024,
+        acceptedFrames: 0,
+        acceptedBytes: 0,
+      });
+      expect(await readFile(created.browserStartHelperPath, "utf8")).toContain(
+        'const recordingOrigin = "https://demo.example";',
+      );
+      expect(created.browserStartHelperPath).toBe(
+        `${artifactRoot}/browser-helpers/session-origin/browser-start.mjs`,
+      );
+      await service.discard({ sessionId: created.sessionId });
+    } finally {
+      await rm(artifactRoot, { recursive: true, force: true });
+    }
+  });
+
+  it("keeps a budget-terminal capture inspectable with its safe counters", async () => {
+    const artifactRoot = await mkdtemp(join(tmpdir(), "recordly-codex-budget-terminal-"));
+    try {
+      const service = createSessionStoreService({ artifactRoot, idSource: () => "session-budget" });
+      const created = await service.create({
+        url: "https://demo.example/products",
+        objective: "Show the approved opening state.",
+        maxAcceptedFrames: 1,
+      });
+      const startHelper = await readFile(created.browserStartHelperPath, "utf8");
+      const endpoint = JSON.parse(
+        startHelper.match(/^const endpoint = (.+);$/mu)?.[1] ?? "null",
+      ) as string;
+      const claim = await fetch(`${endpoint}/claim`, {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({
+          sessionId: created.sessionId,
+          url: "https://demo.example/products",
+        }),
+      });
+      const token = ((await claim.json()) as { token: string }).token;
+      const frame = (sequence: number) => ({
+        sessionId: created.sessionId,
+        url: "https://demo.example/products",
+        frame: {
+          sessionId: sequence,
+          data: Buffer.from(`frame-${sequence}`).toString("base64"),
+          metadata: { deviceWidth: 1440, deviceHeight: 900 },
+        },
+      });
+      for (const [sequence, expectedStatus] of [
+        [1, 200],
+        [2, 429],
+      ] as const) {
+        const response = await fetch(`${endpoint}/frame`, {
+          method: "POST",
+          headers: { "content-type": "application/json", "x-recordly-capability": token },
+          body: JSON.stringify(frame(sequence)),
+        });
+        expect(response.status).toBe(expectedStatus);
+      }
+
+      await expect(service.inspect({ sessionId: created.sessionId })).resolves.toMatchObject({
+        capture: { phase: "failed", reason: "budget_exceeded", acceptedFrames: 1 },
+      });
+      await expect(service.seal({ sessionId: created.sessionId })).rejects.toThrow(
+        "recording session service is unavailable",
+      );
+      await service.discard({ sessionId: created.sessionId });
+    } finally {
+      await rm(artifactRoot, { recursive: true, force: true });
+    }
   });
 
   it("builds the stdio server, exposes the compatible session tools and editable project tools, and creates a recording through an SDK client", async () => {
@@ -345,26 +608,77 @@ describe("recordly Codex MCP handlers", () => {
       await client.connect(transport);
       const listed = await client.listTools();
       expect(listed.tools.map((tool) => tool.name).sort()).toEqual([
+        "apply_accepted_recording_project_editorial",
+        "apply_recording_profile",
+        "create_recording_profile",
         "create_recording_project",
         "create_recording_session",
         "discard_recording_session",
+        "get_recording_profile",
+        "import_recording_project_media",
         "inspect_recording_project",
+        "inspect_recording_project_preview",
         "inspect_recording_session",
+        "judge_recording_project_preview",
+        "list_recording_profiles",
+        "propose_recording_project_editorial",
         "record_browser_event",
         "render_recording_project_final",
         "render_recording_project_preview",
         "revise_recording_project",
         "seal_recording_capture",
+        "update_recording_profile",
       ]);
+      const importTool = listed.tools.find(
+        (tool) => tool.name === "import_recording_project_media",
+      );
+      expect(importTool?.inputSchema).toMatchObject({
+        additionalProperties: false,
+        required: ["projectId", "revision", "fileName"],
+        properties: {
+          projectId: expect.any(Object),
+          revision: expect.any(Object),
+          fileName: expect.any(Object),
+        },
+      });
+      expect(JSON.stringify(importTool?.inputSchema)).not.toContain("authorizedRoot");
+      const proposalTool = listed.tools.find(
+        (tool) => tool.name === "propose_recording_project_editorial",
+      );
+      const applyProposalTool = listed.tools.find(
+        (tool) => tool.name === "apply_accepted_recording_project_editorial",
+      );
+      expect(proposalTool?.inputSchema).toMatchObject({
+        additionalProperties: false,
+        required: ["projectId", "projectRevision"],
+      });
+      expect(applyProposalTool?.inputSchema).toMatchObject({
+        additionalProperties: false,
+        required: ["projectId", "projectRevision", "proposalSha256", "acceptedZoomProposalIds"],
+      });
+      expect(JSON.stringify(proposalTool?.inputSchema)).not.toMatch(/path|frame|evidence/i);
+      expect(JSON.stringify(applyProposalTool?.inputSchema)).not.toMatch(/path|frame|evidence/i);
       const created = toolOutputSchema.parse(
         await client
           .callTool({ name: "create_recording_session", arguments: createInput })
           .then((result) => result.structuredContent),
       );
-      expect(created.ok).toBe(true);
+      expect(created.ok, JSON.stringify(created)).toBe(true);
       if (!created.ok || created.session === undefined) {
         throw new Error("expected a successful recording-session result");
       }
+      const unavailableImport = await client.callTool({
+        name: "import_recording_project_media",
+        arguments: { projectId: "unavailable-project", revision: 0, fileName: "tone.wav" },
+      });
+      expect(unavailableImport).toMatchObject({
+        isError: true,
+        structuredContent: {
+          ok: false,
+          operation: "import_recording_project_media",
+          error: { code: "service_unavailable" },
+        },
+      });
       expect(created.session.sessionId).toMatch(/^[A-Za-z0-9][A-Za-z0-9_-]*$/u);
       const startHelper = await readFile(created.session.browserStartHelperPath, "utf8");
       expect(startHelper).toMatch(/^async \(page\) =>/u);
@@ -451,12 +765,46 @@ describe("recordly Codex MCP handlers", () => {
 
   it("writes JSON-RPC messages only to stdout", async () => {
     const output = await rawJsonRpcOutput();
+    const messages = output.lines.map((line) => JSON.parse(line));
 
     expect(output.stderr).toBe("");
     expect(output.lines).not.toHaveLength(0);
-    expect(output.lines.map((line) => JSON.parse(line))).toEqual(
+    expect(messages).toEqual(
       expect.arrayContaining([expect.objectContaining({ id: 1, jsonrpc: "2.0" })]),
     );
+    expect(messages).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          id: 1,
+          result: expect.objectContaining({
+            serverInfo: { name: "recordly-codex-mcp-server", version: "0.5.0" },
+          }),
+        }),
+      ]),
+    );
+    const listed = messages.find((message) => message.id === 2)?.result?.tools;
+    expect(listed.map((tool: { name: string }) => tool.name).sort()).toEqual([
+      "apply_accepted_recording_project_editorial",
+      "apply_recording_profile",
+      "create_recording_profile",
+      "create_recording_project",
+      "create_recording_session",
+      "discard_recording_session",
+      "get_recording_profile",
+      "import_recording_project_media",
+      "inspect_recording_project",
+      "inspect_recording_project_preview",
+      "inspect_recording_session",
+      "judge_recording_project_preview",
+      "list_recording_profiles",
+      "propose_recording_project_editorial",
+      "record_browser_event",
+      "render_recording_project_final",
+      "render_recording_project_preview",
+      "revise_recording_project",
+      "seal_recording_capture",
+      "update_recording_profile",
+    ]);
     for (const line of output.lines) {
       expect(JSON.parse(line)).toMatchObject({ jsonrpc: "2.0" });
     }

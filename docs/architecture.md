@@ -2,79 +2,59 @@
 
 ## Operating model
 
-Recordly Codex is a local Codex Desktop Browser plugin. The model plans and judges a bounded workflow; deterministic local code owns capture evidence, timing, rendering, encoding, and quality checks. The model receives artifact paths and compact status, never raw frame streams.
+Recordly Codex is a local Codex Desktop Browser plugin. Codex plans, performs safe approved browser actions, and judges bounded preview evidence. Deterministic local code owns capture, receipt timing, persistence, rendering, encoding, and artifact checks. The model receives summaries and a bounded preview image, never raw frame streams.
 
 ```mermaid
 flowchart LR
-  I["Approved URL + objective"] --> M["Ten-tool local MCP service"]
-  M --> H["Per-session Browser helpers"]
-  H --> B["Codex Desktop Browser host"]
-  B -->|"loopback only"| C["Capture broker"]
-  C --> E["Private frame + receipt evidence"]
-  E --> S["Seal gate"]
-  S --> R["Deterministic render + FFmpeg"]
-  R --> D["MP4 + manifest + quality report"]
+  A["Approved URL and objective"] --> S["Capture session"]
+  S --> B["Codex Desktop Browser helpers"]
+  B --> C["Loopback capture broker"]
+  C --> D["Private frame and receipt evidence"]
+  D --> E["Seal and quality gates"]
+  E --> P["Versioned project"]
+  P --> R["Preview render"]
+  R --> I["Decode and inspect preview image"]
+  I --> J["Digest-bound model judgment"]
+  J --> F["Final render"]
 ```
 
-The Browser host, not MCP, runs the helpers. It must expose `browser_run_code_unsafe`. The helpers use only the active page object and a loopback endpoint; they do not need Node imports, filesystem access, process access, or a model-visible data channel.
+The Browser host runs the generated helper entrypoints. The local MCP service does not drive a CLI or IDE browser, capture a native display/window, or substitute a desktop recording application.
 
-## Session contract
+## Capture contract
 
-`create_recording_session` accepts `url`, `objective`, and optional `allowedOrigins`/`allowPrivateOrigin`. The service fixes the viewport at 1440×900 and delivery profile at 1920×1080, 30 fps, silent MP4 with bounded attempts. It creates a private session root, broker, capture configuration, and two generated helper entrypoints.
+`create_recording_session` takes an approved `url`, `objective`, and bounded capture limits. The canonical origin derives from the URL; there is no custom origin-set input.
 
-The other capture-session tools are:
+Generated helpers are one-session entrypoints. They send browser-scoped screencast frames to a loopback broker, which durably writes each accepted frame before acknowledgement and assigns receipt offsets on a monotonic local clock. Trusted click and wheel-derived scroll evidence is narrow and broker-owned. `record_browser_event` may add planned semantic context, but it cannot manufacture observed action evidence.
 
-| Tool | Purpose |
-| --- | --- |
-| `record_browser_event` | Append model-described semantic `pointer`, `click`, `scroll`, `navigation`, `viewport`, or `marker` evidence. The service assigns session ID, sequence, and monotonic timestamp. |
-| `inspect_recording_session` | Return redacted status and contained paths. |
-| `seal_recording_capture` | Require complete capture evidence, render, encode, and return delivery artifacts only when approved. |
-| `discard_recording_session` | Close the broker and remove the owned session and helper entrypoints. |
+Sealing renders only a stopped, complete capture. It fails closed on invalid timing, unapproved evidence, no decoded visible change, insufficient final hold, frozen frames, clipping, privacy, or media failures. A sealed delivery yields a deterministic MP4, manifest, and quality report.
 
-Frame and capture-health events are not MCP inputs. They are emitted by the local broker after a Browser helper posts an actual screencast frame.
+## Project contract
 
-## Editable project contract
+The project stage has 15 tools in addition to the five capture tools. It supports canonical full-document revisions, profiles, private media import, editorial proposals, preview inspection, preview judgment, and final publication.
 
-Five additional tools operate after a quality-approved capture is sealed:
+Projects are revisioned and digest-bound. A project may declare bounded trims, speed regions, cuts/crossfades, observed cursor/click effects, zooms, annotations, captions, imported image/video/audio assets, and constrained framing. It is not a GUI timeline or a Recordly-compatible project document.
 
-| Tool | Purpose |
-| --- | --- |
-| `create_recording_project` | Create a canonical versioned project from one approved sealed capture. |
-| `inspect_recording_project` | Read the current project, revision, digest, and preview state. |
-| `revise_recording_project` | Replace the complete project with a validated monotonic manual or bounded automated revision. |
-| `render_recording_project_preview` | Render a preview for the exact current revision. |
-| `render_recording_project_final` | Render a final only when the same current revision already has a matching preview. |
+`RECORDLY_CODEX_IMPORT_ROOT` configures one stable authorized import directory when the service starts. `import_recording_project_media` accepts only a project, exact revision, and bounded relative file name. The runtime copies the selected bytes into private storage, verifies type and SHA-256 identity, and exposes an opaque media ID. Audio is normalized to WAV. The tool never accepts a caller-selected root or arbitrary path.
 
-The project is the durable editing contract. It can reference approved capture sources and declare clip trims, speed ramps, cuts/crossfades, cursor/click evidence, zooms, annotations, captions, PiP, WAV audio, output quality, and explicit local render hooks. A new revision invalidates an older preview. Project creation, revision, and rendering are serialized by project ID with expected-revision/digest checks so stale operations cannot overwrite newer work.
+Profiles are either fixed built-ins or owner-local strict snapshots. Applying one is a normal, explicit project revision. The built-ins cover landscape 1920×1080, square 1080×1080, and vertical 1080×1920 output.
 
-An approved v0.2.0 sealed delivery can be migrated without recapture. The v0.3.0 reader accepts a missing cursor track as empty, derives project evidence from the private sealed manifest rather than a legacy `0644` capture-event log, and scales proportional legacy screencast frames to the sealed geometry. It rejects incompatible aspect/geometry, digest, containment, or permission evidence.
+## Editorial, preview, and final gates
 
-## Capture, timing, and privacy
+`propose_recording_project_editorial` returns a canonical, evidence-backed proposal for the exact current project revision. Only `zoomProposals` can be applied, using `apply_accepted_recording_project_editorial` with the exact proposal digest and explicitly selected IDs. Review-trim proposals and transition suggestions are intentionally review-only.
 
-The helper performs one claim for its session and receives a random capability token. The broker accepts JSON only from loopback, only for that session and approved origin, and rejects oversized or malformed frames. It writes a frame before the helper ACKs the CDP screencast frame.
+Preview is a required evidence state, not a polite suggestion:
 
-At local broker receipt, each accepted frame is assigned `receiptOffsetUs`: zero for the first frame and strictly increasing thereafter. This is timing evidence created locally, not page data. Partial or legacy timing may remain inspectable, but cannot receive quality-approved delivery status.
+1. Render the exact current revision with `render_recording_project_preview`.
+2. Call `inspect_recording_project_preview`; it decodes a bounded private copy and returns technical QA plus a three-frame contact-sheet image.
+3. Judge that exact project and preview with `judge_recording_project_preview`, passing both SHA-256 digests returned by inspection. The verdict is immutable for that identity.
+4. On `revise`, create a bounded new revision and repeat preview, inspection, and judgment. On `accept`, `render_recording_project_final` may render the exact current revision.
 
-Artifact roots are absolute, contained, owner-token protected directories. Browser helpers live separately in the Browser-approved bridge root. Raw frames, cookies, headers, raw DOM, and captured page text are excluded from MCP output, manifests intended for delivery, Git, and model context.
+Final rendering checks that the preview is current and, for the V2 workflow, that the stored judgment is accepted and digest-matched. Any project revision makes previous preview and judgment evidence stale.
 
-## Seal and delivery
+This permits a fully autonomous safe workflow: Codex can inspect and judge the evidence itself. It does not relax the hard stop gates for authentication, CAPTCHA, secrets, payments, sensitive uploads, permissions, or irreversible actions.
 
-Sealing requires a stopped capture summary with complete acknowledgements, no rejected frames, stable frame geometry, valid hashes, and complete broker receipt timing. The renderer creates a constant-frame-rate 1920×1080 H.264 MP4, probes it with FFmpeg tooling, samples opening/midpoint/final frames, checks for frozen evidence, then emits exactly:
+## Output and evidence boundaries
 
-1. `recording.mp4`
-2. `recording-manifest.json`
-3. `quality-report.json`
+The renderer produces deterministic MP4 or GIF output. GIF excludes audio. Output-parity fixtures exercise preview and final at 1920×1080, 1080×1080, and 1080×1920 in both formats, then decode declared checkpoints for trim, speed, crossfade, reviewed zoom, cursor, click effect, frame style, caption, and annotation.
 
-The delivery manifest includes origin, objective, aggregate evidence hashes, and quality provenance while omitting target path/query/fragment, credentials, and raw-frame paths. A receipt-timed, non-frozen capture is approved; a legacy-timed one is only a candidate.
-
-The sealed-capture baseline deliberately stays conservative. The editable project renderer adds deterministic source-timed composition: trims, constant or ramped speed, cuts/crossfades, cursor and click effects from observed evidence, manual/automatic zooms, annotations, captions, PiP, WAV audio, and declared hooks. It emits MP4 or GIF with deterministic quality profiles; GIF rejects audio.
-
-Capture frames, PiP, and audio are never trusted by a hash-then-reopen pathname flow. Rendering copies the exact bytes read from one opened, bounded regular file into exclusive private snapshots, verifies digest and media type, and makes FFmpeg or the compositor consume only those snapshots. Final publication also uses a verified private staging path and atomic publication. Temporary staging is removed on success or failure.
-
-## Supported scope and live evidence
-
-The final approved evidence exercised the local MCP service, one-time Browser-to-broker claim, bounded hero/scroll capture, receipt-timed rendering, and the three contained delivery artifacts against an authorized public workflow. Identifiers, paths, captured pixels, and hashes are intentionally not published.
-
-Final v0.3.0 candidate acceptance exercised an authorized Recordly.dev hero-to-features capture, approved v0.2.0 sealed-delivery migration, project revision without recapture, preview, and final rendering through the supported Codex Desktop Browser path. Raw MCP exposed ten tools. The capture accepted and acknowledged 892 frames with zero rejected frames. The decoded MP4 preview was 1920×1080 at 30 fps for 29.533333 seconds; private evidence remained mode `0600`, and visual QA passed. Revision advanced from 0 to 1 without recapture, and the second preview and final had the same deterministic SHA.
-
-That evidence proves one candidate workflow, not arbitrary web autonomy or a published installation. v0.3.0 still needs public release and clean marketplace-install verification. Browser/system audio capture, login, CAPTCHA, payment, uploads, downloads, browser permissions, cross-origin expansion, native windows, and irreversible side effects remain outside the supported autonomous workflow and stop for user direction.
+Those fixtures establish bounded clean-room renderer behavior. They do not establish pixel identity with Recordly, a live Codex Desktop Browser proof, or support for Recordly features outside this contract: native display/window/microphone/system-audio capture, GUI timeline editing, `.recordly` persistence, dynamic webcam capture and controls, broad wallpaper/background controls, or its wider export surface.

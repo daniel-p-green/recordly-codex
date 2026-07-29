@@ -42,10 +42,23 @@ export function assertRasterSourceBounded(source: { width: number; height: numbe
 /** Explicit, path-free mapping from project asset IDs to contained asset-root paths. */
 export type ProjectRenderAssets = Readonly<Record<string, string>>;
 
+/**
+ * A verified, decoded visual stream keyed only by a registered V2 media ID.
+ * The future FFmpeg adapter owns file decoding and supplies this path-free seam.
+ * Callers that own decoder handles must await `dispose()` in a `finally` block
+ * after render success or failure; the renderer never disposes caller-owned handles.
+ */
+export type ResolvedVisualSource = LazyRasterSource & {
+  sha256: string;
+  kind: "image" | "video";
+  dispose: () => void | Promise<void>;
+};
+
 /** Stable bounded renderer input. Source pixels are supplied lazily, never as a capture-wide frame array. */
 export type RecordingProjectRenderInput = {
   project: RecordingProject;
   sources: readonly LazyRasterSource[];
+  visualSources?: readonly ResolvedVisualSource[];
   assetRoot: string;
   assets: ProjectRenderAssets;
   outputPath: string;
@@ -58,6 +71,29 @@ export type RecordingProjectRenderResult = {
   frameCount: number;
   durationUs: number;
 };
+
+export function audioMixControlsForProjectTrack(
+  project:
+    | { readonly schemaVersion: 1 }
+    | Pick<Extract<RecordingProject, { schemaVersion: 2 }>, "schemaVersion" | "audioMix">,
+  track: Pick<RecordingProject["audioTracks"][number], "id" | "asset">,
+): Pick<
+  import("../encoder/presentation.js").PresentationAudioTrack,
+  "id" | "role" | "pan" | "fadeInUs" | "fadeOutUs" | "ducking"
+> {
+  if (project.schemaVersion === 1) return {};
+  const mix = project.audioMix.tracks.find((candidate) => candidate.trackId === track.id);
+  if (mix === undefined || mix.mediaId !== track.asset.assetId)
+    throw new RangeError("V2 audio mix does not match project audio track");
+  return {
+    id: track.id,
+    role: mix.role,
+    pan: mix.pan,
+    fadeInUs: mix.fadeInUs,
+    fadeOutUs: mix.fadeOutUs,
+    ducking: mix.ducking,
+  };
+}
 
 function parsePpm(value: Buffer): { width: number; height: number; pixels: Buffer } {
   const first = value.indexOf(0x0a);
@@ -99,6 +135,9 @@ export async function renderRecordingProject(
   input: RecordingProjectRenderInput,
 ): Promise<RecordingProjectRenderResult> {
   const project = validateRecordingProject(input.project);
+  const presentationControls =
+    project.schemaVersion === 2 ? project.presentationControls : undefined;
+  const includeAudio = presentationControls?.export.audio !== "mute";
   const plan = buildCompositionPlanFromProject(toProjectRenderInput(project), {
     ...(input.cursorTrack === undefined ? {} : { cursorTrack: input.cursorTrack }),
     ...(input.clickTrack === undefined ? {} : { clickTrack: input.clickTrack }),
@@ -117,15 +156,55 @@ export async function renderRecordingProject(
       throw new RangeError("project capture source geometry exceeds renderer pixel bounds");
     }
   }
-  if (project.output.format === "gif" && project.audioTracks.length > 0)
+  const visualSources = input.visualSources ?? [];
+  if (project.schemaVersion === 1 && visualSources.length > 0) {
+    throw new RangeError("V1 projects cannot consume resolved visual sources");
+  }
+  if (project.schemaVersion === 2) {
+    const visualSourceById = new Map(visualSources.map((source) => [source.id, source]));
+    const visualMediaById = new Map(project.media.assets.map((asset) => [asset.id, asset]));
+    const requiredVisualMediaIds = new Set(project.visualTracks.map((track) => track.mediaId));
+    if (
+      visualSourceById.size !== visualSources.length ||
+      visualSources.length !== requiredVisualMediaIds.size
+    ) {
+      throw new RangeError(
+        "resolved visual source identifiers must exactly match V2 visual tracks",
+      );
+    }
+    for (const mediaId of requiredVisualMediaIds) {
+      const source = visualSourceById.get(mediaId);
+      const media = visualMediaById.get(mediaId);
+      if (
+        source === undefined ||
+        media === undefined ||
+        (media.kind !== "image" && media.kind !== "video") ||
+        source.kind !== media.kind ||
+        source.sha256 !== media.sha256
+      ) {
+        throw new RangeError("resolved visual source does not match registered V2 media");
+      }
+      assertRasterSourceBounded(source);
+      if (
+        media.kind === "video" &&
+        (source.width !== media.width || source.height !== media.height)
+      ) {
+        throw new RangeError(
+          "resolved video visual source geometry does not match registered media",
+        );
+      }
+    }
+  }
+  if (project.output.format === "gif" && includeAudio && project.audioTracks.length > 0)
     throw new RangeError("GIF delivery cannot represent project audio");
   const durationUs = Math.round(assembledPresentationDurationUs(plan));
   assertAudioTracksBounded(
-    project.audioTracks.map((track) => ({
+    (includeAudio ? project.audioTracks : []).map((track) => ({
       path: "",
       startUs: track.startUs,
       trim: track.trim,
       gainDb: track.gainDb,
+      ...audioMixControlsForProjectTrack(project, track),
     })),
     durationUs,
   );
@@ -156,7 +235,7 @@ export async function renderRecordingProject(
       });
     }
     const audioTracks = await Promise.all(
-      project.audioTracks.map(async (track, index) => {
+      (includeAudio ? project.audioTracks : []).map(async (track, index) => {
         const relativePath = input.assets[track.asset.assetId];
         if (relativePath === undefined) throw new RangeError("audio asset mapping is unavailable");
         return {
@@ -172,6 +251,7 @@ export async function renderRecordingProject(
           startUs: track.startUs,
           trim: track.trim,
           gainDb: track.gainDb,
+          ...audioMixControlsForProjectTrack(project, track),
         };
       }),
     );
@@ -179,7 +259,7 @@ export async function renderRecordingProject(
     async function* counted(): AsyncGenerator<Buffer> {
       for await (const frame of streamPresentationFrames({
         plan,
-        sources: [...input.sources, ...resolvedPiP],
+        sources: [...input.sources, ...resolvedPiP, ...visualSources],
       })) {
         frameCount += 1;
         yield frame;
@@ -195,6 +275,12 @@ export async function renderRecordingProject(
       durationUs,
       outputPath: input.outputPath,
       audioTracks,
+      ...(presentationControls === undefined
+        ? {}
+        : {
+            colorRange: presentationControls.export.colorRange,
+            metadata: presentationControls.export.metadata,
+          }),
     });
     return { outputPath: input.outputPath, frameCount, durationUs };
   } finally {

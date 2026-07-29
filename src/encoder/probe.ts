@@ -1,14 +1,10 @@
-import { execFile } from "node:child_process";
-import { promisify } from "node:util";
-
 import {
   assertOwnedFixtureArtifactPaths,
   type FixtureArtifactPaths,
   fixtureVideoContract,
   resolveMediaExecutable,
 } from "./ffmpeg.js";
-
-const execFileAsync = promisify(execFile);
+import { MEDIA_PROCESS_POLICY, runMediaProcess } from "./media-process.js";
 
 type FfprobeStream = {
   codec_type?: string;
@@ -49,18 +45,23 @@ export type RenderedVideoProbe = {
 
 export async function probeRenderedVideo(inputPath: string): Promise<RenderedVideoProbe> {
   const ffprobe = await resolveMediaExecutable("ffprobe");
-  const { stdout } = await execFileAsync(ffprobe, [
-    "-v",
-    "error",
-    "-count_frames",
-    "-show_entries",
-    "stream=codec_type,width,height,pix_fmt,color_range,avg_frame_rate,nb_read_frames",
-    "-show_entries",
-    "format=duration",
-    "-of",
-    "json",
-    inputPath,
-  ]);
+  const { stdout } = await runMediaProcess({
+    executable: ffprobe,
+    label: "rendered video probe",
+    timeoutMs: MEDIA_PROCESS_POLICY.inspectionDeadlineMs,
+    args: [
+      "-v",
+      "error",
+      "-count_frames",
+      "-show_entries",
+      "stream=codec_type,width,height,pix_fmt,color_range,avg_frame_rate,nb_read_frames",
+      "-show_entries",
+      "format=duration",
+      "-of",
+      "json",
+      inputPath,
+    ],
+  });
   const inspected = JSON.parse(stdout) as FfprobeOutput;
   const video = inspected.streams?.find((stream) => stream.codec_type === "video");
   if (
@@ -78,7 +79,12 @@ export async function probeRenderedVideo(inputPath: string): Promise<RenderedVid
     throw new Error("ffprobe did not report a finite duration and exact decoded frame count");
   }
   const ffmpeg = await resolveMediaExecutable("ffmpeg");
-  await execFileAsync(ffmpeg, ["-v", "error", "-i", inputPath, "-map", "0:v:0", "-f", "null", "-"]);
+  await runMediaProcess({
+    executable: ffmpeg,
+    label: "rendered video decode check",
+    timeoutMs: MEDIA_PROCESS_POLICY.inspectionDeadlineMs,
+    args: ["-v", "error", "-i", inputPath, "-map", "0:v:0", "-f", "null", "-"],
+  });
   return {
     width: video.width,
     height: video.height,
@@ -97,23 +103,28 @@ async function extractPpmFrame(
   outputPath: string,
 ): Promise<void> {
   const ffmpeg = await resolveMediaExecutable("ffmpeg");
-  await execFileAsync(ffmpeg, [
-    "-hide_banner",
-    "-loglevel",
-    "error",
-    "-i",
-    inputPath,
-    "-ss",
-    timestampSeconds.toFixed(6),
-    "-frames:v",
-    "1",
-    "-f",
-    "image2",
-    "-vcodec",
-    "ppm",
-    "-y",
-    outputPath,
-  ]);
+  await runMediaProcess({
+    executable: ffmpeg,
+    label: "fixture sample extraction",
+    timeoutMs: MEDIA_PROCESS_POLICY.inspectionDeadlineMs,
+    args: [
+      "-hide_banner",
+      "-loglevel",
+      "error",
+      "-i",
+      inputPath,
+      "-ss",
+      timestampSeconds.toFixed(6),
+      "-frames:v",
+      "1",
+      "-f",
+      "image2",
+      "-vcodec",
+      "ppm",
+      "-y",
+      outputPath,
+    ],
+  });
 }
 
 export async function extractFixtureSampleFrames(

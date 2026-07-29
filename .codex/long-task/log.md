@@ -81,3 +81,11 @@ Record meaningful milestones only. Keep entries concise and evidence-based.
 - Installed evidence: The plugin is installed and enabled at version 0.3.0. Its server reported 0.3.0, exposed exactly ten tools, passed create/discard smoke, and produced empty stderr.
 - Integrity evidence: The installed bundle SHA-256 matched source at `6ab1455733de81bd8ac259b815f2d428c490335eed4e29ad1bcba5eea2e2a228`.
 - Closeout: No v0.3.0 publication or install gate remains. The documented safety, host, authorization, and parity limitations still apply.
+
+## 2026-07-29 — v0.5.0 output-parity implementation and QC in progress
+
+- Outcome: Established the V2 project/profile/media foundation, private content-addressed visual and audio handling, decoded video-overlay rendering, deterministic professional audio mixing, structured preview judgment, capture budgets, dead-time review analysis, and release/fixture hygiene checks. Implementation is delegated to GPT-5.6 Terra High agents; the root coordinator performs contract review and independent QA.
+- Independently verified so far: 17 focused profile/project tests, 18 focused audio tests with decoded PCM behavior, 28 visual registry/resolver/service-render tests with decoded temporal video output and tamper-before-publication rejection, and a clean full TypeScript check. These are working-tree results, not a shipped v0.5.0 claim.
+- QC corrections required and landed during review: immutable media-registry create semantics under conflict/concurrency; disposal-integrity before publication; profile-cap concurrency; operational profile defaults; GIF-with-audio rejection; primary-sidechain validity; decoded audio timing, fades, pan, ducking, recovery, and limiter behavior.
+- Next: Finish profile MCP wiring, make all output-parity fixtures executable through encode/decode, implement and verify V2 presentation controls, integrate normalized audio import, expose evidence-backed editorial analysis/zoom proposals, then run the complete release/security/live/install gates.
+- Open release risks: generated bundle and public documentation are stale at v0.3.0; the current branch is uncommitted; no v0.5.0 tag, CI, clean installation, raw installed smoke, or live Codex Desktop Browser acceptance has occurred.

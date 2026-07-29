@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-
+import { migrateV1RecordingProject, toProjectRenderInput } from "../../src/project/index.js";
 import {
   buildCompositionPlan,
   buildCompositionPlanFromProject,
@@ -9,6 +9,90 @@ import {
 } from "../../src/render/composition.js";
 
 describe("deterministic composition planning", () => {
+  it("uses only bounded observed source evidence for a V2 cursor trail", () => {
+    const migrated = migrateV1RecordingProject({
+      schemaVersion: 1,
+      projectId: "observed-trail",
+      revision: 0,
+      revisionPolicy: { automatedRevisionLimit: 1, automatedRevisionCount: 0 },
+      captureSources: [
+        {
+          id: "capture",
+          sessionId: "session",
+          manifestSha256: "a".repeat(64),
+          timelineSha256: "b".repeat(64),
+          frameSetSha256: "c".repeat(64),
+          sourceWidth: 160,
+          sourceHeight: 90,
+          durationUs: 1_000_000,
+        },
+      ],
+      output: {
+        profile: "landscape-1080p",
+        width: 1920,
+        height: 1080,
+        fps: 30,
+        format: "mp4",
+        quality: "standard",
+      },
+      timeline: {
+        clips: [
+          {
+            id: "clip",
+            sourceId: "capture",
+            trim: { startUs: 0, endUs: 1_000_000 },
+            speedRegions: [],
+            zoomRegions: [],
+            transitionAfter: { kind: "cut", durationUs: 0 },
+          },
+        ],
+      },
+      presentation: {
+        cursor: {
+          visible: true,
+          preset: "system",
+          sizePx: 24,
+          motion: "source",
+          clickEffect: "none",
+        },
+        frame: {
+          background: { kind: "solid", color: "#000000" },
+          paddingPx: 0,
+          radiusPx: 0,
+          shadow: "none",
+        },
+      },
+      overlays: { annotations: [], captions: [] },
+      audioTracks: [],
+      pipTracks: [],
+      renderHooks: [],
+      preview: { status: "not-requested" },
+    });
+    const plan = buildCompositionPlanFromProject(
+      toProjectRenderInput({
+        ...migrated,
+        presentationControls: {
+          ...migrated.presentationControls,
+          cursor: { emphasis: "trail", trailDurationUs: 1_000_000 },
+        },
+      }),
+      {
+        cursorTrack: Array.from({ length: 120 }, (_, index) => ({
+          sourceId: "capture",
+          sourceTimeUs: index * 8_000,
+          x: index,
+          y: 45,
+          state: "default" as const,
+        })),
+      },
+    );
+    const history = plan.cursorHistoryAtSource?.("capture", 1_000_000, 1_000_000) ?? [];
+    expect(history).toHaveLength(96);
+    expect(history[0]).toMatchObject({ tUs: 192_000 });
+    expect(history.at(-1)).toMatchObject({ tUs: 952_000 });
+    expect(plan.cursorHistoryAtSource?.("missing", 1_000_000, 1_000_000)).toEqual([]);
+  });
+
   it("resolves a reusable preset into an immutable, action-led presentation plan", () => {
     const plan = buildCompositionPlan({
       schemaVersion: 1,
@@ -272,5 +356,156 @@ describe("deterministic composition planning", () => {
     });
     expect(plan.hooks).toEqual(["safe-title-card"]);
     expect(JSON.stringify(plan)).not.toContain("path");
+  });
+
+  it("uses only accepted V2 zoom proposals instead of unreviewed proposals or legacy zooms", () => {
+    const migrated = migrateV1RecordingProject({
+      schemaVersion: 1,
+      projectId: "reviewed-zoom-project",
+      revision: 0,
+      revisionPolicy: { automatedRevisionLimit: 1, automatedRevisionCount: 0 },
+      captureSources: [
+        {
+          id: "capture-1",
+          sessionId: "session-1",
+          manifestSha256: "a".repeat(64),
+          timelineSha256: "b".repeat(64),
+          frameSetSha256: "c".repeat(64),
+          sourceWidth: 160,
+          sourceHeight: 90,
+          durationUs: 1_000_000,
+        },
+      ],
+      output: {
+        profile: "landscape-1080p",
+        width: 1920,
+        height: 1080,
+        fps: 30,
+        format: "mp4",
+        quality: "standard",
+      },
+      timeline: {
+        clips: [
+          {
+            id: "clip-1",
+            sourceId: "capture-1",
+            trim: { startUs: 0, endUs: 1_000_000 },
+            speedRegions: [],
+            zoomRegions: [
+              {
+                id: "legacy-zoom",
+                startUs: 0,
+                endUs: 1_000_000,
+                mode: "manual",
+                focus: { x: 0.1, y: 0.1 },
+                scale: 1.1,
+                easing: "linear",
+              },
+            ],
+            transitionAfter: { kind: "cut", durationUs: 0 },
+          },
+          {
+            id: "clip-2",
+            sourceId: "capture-1",
+            trim: { startUs: 0, endUs: 1_000_000 },
+            speedRegions: [],
+            zoomRegions: [],
+            transitionAfter: { kind: "cut", durationUs: 0 },
+          },
+        ],
+      },
+      presentation: {
+        cursor: {
+          visible: false,
+          preset: "system",
+          sizePx: 24,
+          motion: "source",
+          clickEffect: "none",
+        },
+        frame: {
+          background: { kind: "solid", color: "#000000" },
+          paddingPx: 0,
+          radiusPx: 0,
+          shadow: "none",
+        },
+      },
+      overlays: { annotations: [], captions: [] },
+      audioTracks: [],
+      pipTracks: [],
+      renderHooks: [],
+      preview: { status: "not-requested" },
+    });
+    const project = {
+      ...migrated,
+      timeline: {
+        clips: [
+          {
+            ...migrated.timeline.clips[0],
+            transitionAfter: { kind: "crossfade" as const, durationUs: 100_000 },
+          },
+          migrated.timeline.clips[1],
+        ],
+      },
+      timelineTransitions: [
+        {
+          clipId: "clip-1",
+          family: "wipe-left" as const,
+          durationUs: 100_000,
+          easing: "ease-out" as const,
+        },
+      ],
+      zoomProposals: [
+        {
+          id: "proposed",
+          clipId: "clip-1",
+          sourceRange: { startUs: 0, endUs: 1_000_000 },
+          focus: { x: 0.9, y: 0.9 },
+          scale: 2,
+          easing: "linear" as const,
+          review: { status: "proposed" as const, basis: "manual" as const },
+        },
+        {
+          id: "rejected",
+          clipId: "clip-1",
+          sourceRange: { startUs: 0, endUs: 1_000_000 },
+          focus: { x: 0.8, y: 0.8 },
+          scale: 2,
+          easing: "linear" as const,
+          review: { status: "rejected" as const, basis: "manual" as const },
+        },
+        {
+          id: "accepted",
+          clipId: "clip-1",
+          sourceRange: { startUs: 0, endUs: 1_000_000 },
+          focus: { x: 0.25, y: 0.75 },
+          scale: 1.5,
+          easing: "linear" as const,
+          review: { status: "accepted" as const, basis: "observed-input" as const },
+        },
+      ],
+    };
+
+    const plan = buildCompositionPlanFromProject(toProjectRenderInput(project));
+
+    expect(plan.zoomAt(750_000, "clip-1", 750_000)).toEqual({
+      x: 40,
+      y: 67.5,
+      scale: 1.375,
+    });
+    expect(plan.reviewedTransitions).toEqual([
+      { clipId: "clip-1", family: "wipe-left", durationUs: 100_000, easing: "ease-out" },
+    ]);
+    expect(plan.presentationControls).toEqual(migrated.presentationControls);
+    expect(() =>
+      buildCompositionPlanFromProject(
+        toProjectRenderInput({
+          ...project,
+          presentationControls: {
+            ...project.presentationControls,
+            cursor: { emphasis: "spotlight" as const, trailDurationUs: 0 },
+          },
+        }),
+      ),
+    ).toThrow(/visible cursor/u);
   });
 });

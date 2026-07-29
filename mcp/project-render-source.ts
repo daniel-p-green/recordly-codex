@@ -3,8 +3,10 @@ import { createHash, randomUUID } from "node:crypto";
 import { chmod, lstat, open, readFile, realpath, unlink } from "node:fs/promises";
 import { isAbsolute, join, relative, resolve } from "node:path";
 import { promisify } from "node:util";
+import { type ActivityAnalysisResult, analyzeDeadTime } from "../src/analysis/index.js";
 import { resolveMediaExecutable } from "../src/encoder/ffmpeg.js";
 import { canonicalJson } from "../src/manifest/index.js";
+import { assertCaptureSourceGeometryBounded } from "../src/project/capture-geometry.js";
 import type { ProjectCaptureSource } from "../src/project/index.js";
 import type { CursorSample } from "../src/render/composition.js";
 import type { LazyRasterSource, RasterFrame } from "../src/render/raster-compositor.js";
@@ -13,7 +15,6 @@ const execFileAsync = promisify(execFile);
 const framePath = /^frames\/raw\/frame-\d{6}\.(?:jpe?g|png)$/u;
 const digest = /^[a-f0-9]{64}$/u;
 const MAX_CAPTURE_FRAMES = 18_000;
-const MAX_SOURCE_PIXELS = 16_777_216;
 const MAX_CAPTURE_FRAME_BYTES = 64 * 1024 * 1024;
 
 type CaptureFrame = { tUs: number; path: string; sha256: string };
@@ -40,6 +41,8 @@ type JsonObject = Record<string, unknown> & {
   y?: unknown;
   state?: unknown;
   cfrFrameIndex?: unknown;
+  deltaX?: unknown;
+  deltaY?: unknown;
 };
 
 export type CapturePresentationEvidence = {
@@ -61,6 +64,19 @@ export type SourceKeyedCapturePresentationEvidence = {
     x: number;
     y: number;
   }>;
+};
+
+export type VerifiedCaptureEditorialEvidence = {
+  observedEvents: Array<{
+    id: string;
+    source: "observed";
+    sourceId: string;
+    tUs: number;
+    kind: "click" | "scroll";
+    x: number;
+    y: number;
+  }>;
+  deadTime: ActivityAnalysisResult;
 };
 
 function contained(root: string, candidate: string): boolean {
@@ -298,6 +314,139 @@ async function parseFrames(input: {
   return frames;
 }
 
+function boundedFrameSamples(
+  frames: readonly CaptureFrame[],
+  slots: readonly number[],
+): Array<{ tUs: number; sha256: string }> {
+  const maximum = 10_000;
+  if (frames.length !== slots.length || frames.length === 0)
+    throw new RangeError("delivery timeline does not match capture frames");
+  const indexes =
+    frames.length <= maximum
+      ? Array.from({ length: frames.length }, (_, index) => index)
+      : Array.from({ length: maximum }, (_, index) =>
+          Math.floor((index * (frames.length - 1)) / (maximum - 1)),
+        );
+  return indexes.map((index) => ({
+    tUs: slots[index] as number,
+    sha256: (frames[index] as CaptureFrame).sha256,
+  }));
+}
+
+/**
+ * Reads only bounded, hash-verified source-time evidence from a sealed capture.
+ * No raw paths or frame bytes leave this boundary.
+ */
+export async function readVerifiedCaptureEditorialEvidence(input: {
+  artifactRoot: string;
+  source: ProjectCaptureSource;
+}): Promise<VerifiedCaptureEditorialEvidence> {
+  if (!isAbsolute(input.artifactRoot)) throw new RangeError("artifact root must be absolute");
+  const artifactStatus = await lstat(input.artifactRoot);
+  if (
+    !artifactStatus.isDirectory() ||
+    artifactStatus.isSymbolicLink() ||
+    (artifactStatus.mode & 0o077) !== 0
+  ) {
+    throw new RangeError("artifact root must be a private non-symlink directory");
+  }
+  const artifactRoot = await realpath(input.artifactRoot);
+  const sessionRoot = await privateDirectory(
+    resolve(artifactRoot, input.source.sessionId),
+    artifactRoot,
+    "capture session",
+  );
+  const manifestPath = await privateRegular(
+    join(sessionRoot, "artifacts", "recording-manifest.json"),
+    sessionRoot,
+    "delivery manifest",
+  );
+  const manifestText = await readFile(manifestPath, "utf8");
+  if (hash(manifestText) !== input.source.manifestSha256)
+    throw new RangeError("delivery manifest digest does not match");
+  const manifest = object(JSON.parse(manifestText) as unknown, "delivery manifest");
+  const source = object(manifest.source, "delivery manifest source");
+  if (
+    source.width !== input.source.sourceWidth ||
+    source.height !== input.source.sourceHeight ||
+    source.aggregateSha256 !== input.source.frameSetSha256
+  ) {
+    throw new RangeError("delivery source does not match project capture source");
+  }
+  const timeline = object(manifest.timeline, "delivery manifest timeline");
+  const slotsValue = timeline.slots;
+  if (timeline.durationUs !== input.source.durationUs || !Array.isArray(slotsValue)) {
+    throw new RangeError("delivery timeline does not match project capture source");
+  }
+  if (slotsValue.length === 0 || slotsValue.length > MAX_CAPTURE_FRAMES) {
+    throw new RangeError("delivery timeline slots are invalid");
+  }
+  const slots = slotsValue.map((value, index) => {
+    const slot = object(value, `delivery timeline slot ${index + 1}`);
+    const tUs = integer(slot.tUs, "delivery timeline slot time");
+    if (
+      tUs > input.source.durationUs ||
+      (index > 0 && tUs <= (slotsValue[index - 1] as { tUs: number }).tUs)
+    )
+      throw new RangeError("delivery timeline slot timing is invalid");
+    return tUs;
+  });
+  const frames = await parseFrames({ sessionRoot, source: input.source });
+  const actionValues = manifest.observedActions;
+  if (!Array.isArray(actionValues) || actionValues.length > 2_048) {
+    throw new RangeError("delivery action evidence is invalid");
+  }
+  const observedEvents = actionValues.map((value, index) => {
+    const action = object(value, `delivery action ${index + 1}`);
+    const cfrFrameIndex = action.cfrFrameIndex;
+    if (
+      !Number.isSafeInteger(cfrFrameIndex) ||
+      (cfrFrameIndex as number) < 0 ||
+      (cfrFrameIndex as number) >= slots.length ||
+      (action.type !== "click" && action.type !== "scroll") ||
+      typeof action.x !== "number" ||
+      !Number.isFinite(action.x) ||
+      typeof action.y !== "number" ||
+      !Number.isFinite(action.y) ||
+      action.x < 0 ||
+      action.x > input.source.sourceWidth ||
+      action.y < 0 ||
+      action.y > input.source.sourceHeight ||
+      (action.type === "click" &&
+        Object.getOwnPropertyNames(action).sort().join(",") !== "cfrFrameIndex,type,x,y") ||
+      (action.type === "scroll" &&
+        (typeof action.deltaX !== "number" ||
+          !Number.isFinite(action.deltaX) ||
+          typeof action.deltaY !== "number" ||
+          !Number.isFinite(action.deltaY) ||
+          (action.deltaX === 0 && action.deltaY === 0) ||
+          Object.getOwnPropertyNames(action).sort().join(",") !==
+            "cfrFrameIndex,deltaX,deltaY,type,x,y"))
+    ) {
+      throw new RangeError("delivery action evidence is invalid");
+    }
+    return {
+      id: `evt-${hash(input.source.id).slice(0, 16)}-${index}`,
+      source: "observed" as const,
+      sourceId: input.source.id,
+      tUs: slots[cfrFrameIndex as number] as number,
+      kind: action.type as "click" | "scroll",
+      x: action.x,
+      y: action.y,
+    };
+  });
+  const frameSamples = boundedFrameSamples(frames, slots);
+  return {
+    observedEvents,
+    deadTime: analyzeDeadTime({
+      schemaVersion: 1,
+      captureDurationUs: input.source.durationUs,
+      frameSamples,
+      actionSamples: observedEvents.map((event) => ({ tUs: event.tUs, kind: event.kind })),
+    }),
+  };
+}
+
 /** Builds a bounded lazy decoder from hash-verified sealed capture evidence. */
 export async function createVerifiedCaptureSource(input: {
   artifactRoot: string;
@@ -305,9 +454,10 @@ export async function createVerifiedCaptureSource(input: {
   stagingRoot: string;
 }): Promise<LazyRasterSource> {
   if (!isAbsolute(input.artifactRoot)) throw new RangeError("artifact root must be absolute");
-  if (input.source.sourceWidth * input.source.sourceHeight > MAX_SOURCE_PIXELS) {
-    throw new RangeError("capture source exceeds the bounded pixel area");
-  }
+  assertCaptureSourceGeometryBounded({
+    width: input.source.sourceWidth,
+    height: input.source.sourceHeight,
+  });
   const artifactStatus = await lstat(input.artifactRoot);
   if (!artifactStatus.isDirectory() || artifactStatus.isSymbolicLink()) {
     throw new RangeError("artifact root must be a non-symlink directory");
