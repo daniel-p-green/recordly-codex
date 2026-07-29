@@ -14,14 +14,14 @@ The supported interaction surface is Codex Desktop Browser. It is not a Codex CL
 | Delivery | Sealing renders a deterministic CFR MP4 and runs media, temporal visible-result, final-hold, frozen-frame, privacy, and decoded clipping checks | Approval fails closed unless broker timing, an automatically observed action, a visible decoded change, final hold, clipping, and the other delivery gates all pass. |
 | Visual treatment | The renderer produces a contained 1080p, 30 fps, limited-range, silent H.264 baseline and verifies decoded source edges, border, matte, and aspect | Temporal alignment proves that a visible result followed an observed action in the allowed window; it does not prove causation or understand page semantics. No cursor, click, or zoom overlay is fabricated. |
 
-The v0.1.0 release was installed through the Git marketplace and exercised against one authorized public workflow. The v0.2.0 candidate adds automatically observed trusted-click and trusted-wheel-derived scroll evidence plus fail-closed temporal visible-result and decoded clipping QA. These proofs do not mean that every public site, Browser host version, authentication flow, or page transition will work unattended.
+The published v0.2.0 release was installed and enabled through the Git marketplace, then exercised against one authorized public workflow. It adds automatically observed trusted-click and trusted-wheel-derived scroll evidence plus fail-closed temporal visible-result and decoded clipping QA. These proofs do not mean that every public site, Browser host version, authentication flow, or page transition will work unattended.
 
 ## Install from a release
 
 Use a released tag when one is available; `main` is appropriate only for development.
 
 ```bash
-codex plugin marketplace add daniel-p-green/recordly-codex --ref <released-tag>
+codex plugin marketplace add daniel-p-green/recordly-codex --ref v0.2.0
 codex plugin add recordly-codex@recordly-codex
 ```
 
@@ -37,7 +37,7 @@ npm run plugin:validate
 npm run check
 ```
 
-The v0.1.0 marketplace package and Browser-helper path were verified after release. Each later tag, including v0.2.0 when published, still requires its own clean marketplace-install and authorized-site acceptance check. Do not treat a local build, a marketplace listing, or an MCP process as that proof.
+The v0.2.0 tag, release workflow, marketplace package, installed stdio MCP runtime, and Browser-helper path were verified after release. The clean installed bundle matched SHA-256 `ea7da03dfd3f4ac31d6dfb76a788aac3e2ad5d3d8c6c47e3265e3ceb9f39b0f2`; raw JSON-RPC exposed exactly the five documented tools and passed session create/discard with empty stderr. Each later tag still requires its own clean marketplace-install and authorized-site acceptance check. Do not treat a local build, a marketplace listing, or an MCP process as that proof.
 
 Requirements: Node.js 22.17+, npm 11+, `ffmpeg`, and `ffprobe`. The loopback E2E harness also needs a supported system Chrome; that Chrome harness is test evidence, not the Codex Browser runtime.
 
