@@ -2,7 +2,7 @@
 
 Recordly Codex is an Apache-2.0 Codex plugin and local TypeScript runtime for producing evidence-backed recordings of approved browser workflows. Codex Desktop Browser performs the approved interaction; local code owns capture evidence, timing, rendering, encoding, and artifact checks. It does not use another visible recording app.
 
-The v0.5.0 candidate has source, fixture, and one authorized public-workflow proof. It is not yet proof of a tagged release, published artifact, or clean-installed plugin; those remain separate release checks.
+v0.5.0 has source, fixture, one authorized public-workflow, public-release, and clean-install proof. The live workflow remains bounded to the helper surface and one approved site.
 
 ## Supported workflow
 
@@ -10,7 +10,7 @@ Use only Codex Desktop Browser with public or explicitly authorized, pre-authent
 
 ## Released installation
 
-After the `v0.5.0` tag and its release artifact are published, install that exact tag with the marketplace selector declared by this repository:
+Install the public [`v0.5.0` release](https://github.com/daniel-p-green/recordly-codex/releases/tag/v0.5.0) with the marketplace selector declared by this repository:
 
 ```bash
 codex plugin marketplace add daniel-p-green/recordly-codex --ref v0.5.0
@@ -19,7 +19,7 @@ codex plugin add recordly-codex@recordly-codex
 
 `recordly-codex@recordly-codex` selects the one `recordly-codex` plugin in `.agents/plugins/marketplace.json`; its source is the repository root, which preserves the `.codex-plugin/` and `.mcp.json` layout. The committed standalone MCP bundle and [third-party notices](THIRD_PARTY_NOTICES.md) are included in the clean export. Node.js plus `ffmpeg` and `ffprobe` are still required on the host when sealing a capture.
 
-This repository does not claim that `v0.5.0` is tagged, published, or clean-installed until those separate release checks have completed.
+PR [#13](https://github.com/daniel-p-green/recordly-codex/pull/13) merged to `main` at `5c92394fbf13400a532b6fd631889bf05cc532b0`. The default `main` CI rerun and an isolated release-workflow rerun passed, and the public release source archive exists. A clean isolated public marketplace installation reported `recordly-codex@recordly-codex` installed and enabled at `0.5.0`; its installed bundle SHA-256 was `966261cfe8988536a33f45c30d32b81fdd739cc47fd321b6f8b0fcbcda9f256e`. A sequential raw MCP check reported server version `0.5.0` and exactly 20 unique tools from `tools/list`.
 
 The runtime exposes 20 local MCP tools:
 

@@ -1,6 +1,6 @@
 # Capability matrix
 
-This is the v0.5.0 source and fixture contract, supplemented by one authorized public-workflow acceptance run. That run used the Codex Playwright helper surface on `https://recordly.dev/`; it is not a claim of native in-app Browser capture, a tagged release, or a clean-installed plugin.
+This is the v0.5.0 source and fixture contract, supplemented by one authorized public-workflow acceptance run, a public release, and a clean isolated marketplace install. The workflow run used the Codex Playwright helper surface on `https://recordly.dev/`; it is not a claim of native in-app Browser capture.
 
 | Area | Supported behavior | Boundary |
 | --- | --- | --- |
@@ -16,7 +16,7 @@ This is the v0.5.0 source and fixture contract, supplemented by one authorized p
 | Editorial | Evidence-backed zoom proposals can be applied only by explicit accepted proposal IDs and exact proposal digest | Trim proposals and transition suggestions are review-only. Do not apply them automatically |
 | Preview QA | A current preview can be decoded into technical evidence plus a contact-sheet image and then receive an immutable digest-bound accept/revise/reject judgment | A new revision stales prior preview/judgment evidence. Final requires a matching preview and accepted current judgment |
 | Output | Deterministic MP4 or GIF, with draft/standard/high profiles; GIF rejects audio | No native export dialogs, arbitrary codecs, alpha video, variable-frame-rate output, or Recordly’s full export controls |
-| Test proof | Output-parity fixtures render preview and final as MP4 and GIF at 1920×1080, 1080×1080, and 1080×1920, then decode checkpoints. One authorized public v0.5.0 run accepted 572/572 frames, passed its seal gates, applied an observed-input zoom, and visually accepted its 1080×1080 preview before final rendering | Fixture proof is neither pixel identity nor broad live-workflow proof. The public run was a Codex Playwright-helper proof, not native in-app Browser capture, release, or clean-install proof |
+| Test proof | Output-parity fixtures render preview and final as MP4 and GIF at 1920×1080, 1080×1080, and 1080×1920, then decode checkpoints. One authorized public v0.5.0 run accepted 572/572 frames, passed its seal gates, applied an observed-input zoom, and visually accepted its 1080×1080 preview before final rendering. The public release and clean isolated marketplace install were also verified at v0.5.0 with a 20-tool raw MCP check | Fixture proof is neither pixel identity nor broad live-workflow proof. The public run was a Codex Playwright-helper proof, not native in-app Browser capture or action-provenance proof |
 | Privacy | Private, contained artifact roots and digest-verified staging snapshots | No visual-redaction guarantee. An authorized page may still show sensitive pixels |
 
 Compared with the public Recordly desktop app, this implementation is intentionally narrower: it has no native capture backends, GUI timeline, saved `.recordly` projects, marketplace extensions, broad background/wallpaper controls, dynamic webcam controls, or full export-control surface. Recordly Codex is independently implemented and does not claim source, API, file-format, editor, or pixel parity.
