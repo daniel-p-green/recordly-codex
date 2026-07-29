@@ -15,14 +15,14 @@ The supported interaction surface is Codex Desktop Browser. It is not a Codex CL
 | Editable composition | A canonical versioned project supports clip trims, constant or ramped speed, cuts and crossfades, source-keyed cursor motion and click effects, manual or automatic zooms, text annotations, captions, PiP images, WAV audio placement/gain, and declared render hooks | Revision numbers and hashes prevent stale preview/final publication. Automatic revisions are bounded. Hooks are declared local render metadata/watermark extension points, not arbitrary plugin execution. |
 | Project rendering | Deterministic preview and final rendering supports MP4 or GIF, three quality profiles, bounded frame/media inputs, and source-time mapping through trims, ramps, and crossfades | GIF cannot contain audio. PiP and audio are consumed from private digest-verified snapshots. The local implementation and tests establish near-output-parity composition features, not pixel identity with Recordly or an editor UI. |
 
-The intended v0.3.0 release adds the five editable-project tools and the production composition path to the five-tool v0.2.0 capture workflow. The candidate has passed local contracts, raw ten-tool MCP smoke, and an authorized Recordly.dev capture-to-project acceptance workflow. It is not published or marketplace-verified yet, so the published v0.2.0 release remains the latest clean-install proof. Neither release evidence means that every public site, Browser host version, authentication flow, or page transition will work unattended.
+The published v0.3.0 release adds the five editable-project tools and the production composition path to the five-tool v0.2.0 capture workflow. It passed local contracts, an authorized Recordly.dev capture-to-project acceptance workflow, and installed raw MCP verification with exactly ten tools. These proofs do not mean that every public site, Browser host version, authentication flow, or page transition will work unattended.
 
 ## Install from a release
 
 Use a released tag when one is available; `main` is appropriate only for development.
 
 ```bash
-codex plugin marketplace add daniel-p-green/recordly-codex --ref v0.2.0
+codex plugin marketplace add daniel-p-green/recordly-codex --ref v0.3.0
 codex plugin add recordly-codex@recordly-codex
 ```
 
@@ -38,7 +38,7 @@ npm run plugin:validate
 npm run check
 ```
 
-The v0.2.0 tag, release workflow, marketplace package, installed stdio MCP runtime, and Browser-helper path were verified after release. The clean installed bundle matched SHA-256 `ea7da03dfd3f4ac31d6dfb76a788aac3e2ad5d3d8c6c47e3265e3ceb9f39b0f2`; raw JSON-RPC exposed exactly the five v0.2.0 tools and passed session create/discard with empty stderr. The intended v0.3.0 package exposes exactly ten tools in raw local MCP verification and has passed one authorized live candidate workflow, but still requires its own release and clean marketplace-install verification. Do not treat a local build, marketplace listing, or running MCP process as published-install proof.
+The [v0.3.0 release](https://github.com/daniel-p-green/recordly-codex/releases/tag/v0.3.0), marketplace package, and installed plugin were verified after release. The installed server reported version 0.3.0, exposed exactly ten tools, and passed create/discard smoke with empty stderr. Its bundle matched the source SHA-256 `6ab1455733de81bd8ac259b815f2d428c490335eed4e29ad1bcba5eea2e2a228`. Each later tag still requires its own clean-install and approved-workflow verification; a local build, marketplace listing, or running MCP process is not enough.
 
 Requirements: Node.js 22.17+, npm 11+, `ffmpeg`, and `ffprobe`. The loopback E2E harness also needs a supported system Chrome; that Chrome harness is test evidence, not the Codex Browser runtime.
 
@@ -64,7 +64,7 @@ Projects can combine approved capture sources and express trims, speed regions a
 
 Approved v0.2.0 sealed deliveries can seed a v0.3.0 project without recapture. Migration treats a missing cursor track as no cursor, uses the sealed manifest rather than reopening a legacy `0644` capture-event log as trusted evidence, and scales proportional legacy screencast frames to the sealed source geometry. Missing or incompatible sealed evidence still fails closed.
 
-Final candidate acceptance exercised an approved Recordly.dev hero-to-features workflow: 892 frames were accepted and acknowledged with zero rejected, the v0.2.0 sealed delivery migrated without recapture, and revision advanced from 0 to 1. The decoded MP4 preview was 1920×1080 at 30 fps for 29.533333 seconds; the second preview and final had the same deterministic SHA, private evidence remained mode `0600`, and visual QA passed. This is candidate evidence, not public-release or clean-install proof.
+Release acceptance exercised an approved Recordly.dev hero-to-features workflow: 892 frames were accepted and acknowledged with zero rejected, the v0.2.0 sealed delivery migrated without recapture, and revision advanced from 0 to 1. The decoded MP4 preview was 1920×1080 at 30 fps for 29.533333 seconds; the second preview and final had the same deterministic SHA, private evidence remained mode `0600`, and visual QA passed.
 
 The loopback broker grants one random capability token on the helper's one-time claim. The token stays out of injected page code. The broker accepts only loopback JSON requests for that session and origin. Each accepted frame and observed action receives a local monotonic `receiptOffsetUs`; the page cannot choose it. The first frame offset is zero, later frame offsets are strictly increasing, and observed actions share that clock. An observed event before the first durable frame, or malformed, oversized, unauthenticated, wrong-origin, excessive, incomplete, or unpersisted evidence, fails the capture closed. Legacy evidence can be inspected, but cannot become a quality-approved delivery.
 
