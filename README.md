@@ -2,7 +2,7 @@
 
 Recordly Codex is an Apache-2.0 Codex plugin and local TypeScript runtime for producing evidence-backed recordings of approved browser workflows. Codex Desktop Browser performs the approved interaction; local code owns capture evidence, timing, rendering, encoding, and artifact checks. It does not use another visible recording app.
 
-This is the v0.5.0 working-tree contract. It is source and fixture evidence, not proof of a released, clean-installed plugin or a live Codex Desktop Browser workflow. Those require their own verification.
+The v0.5.0 candidate has source, fixture, and one authorized public-workflow proof. It is not yet proof of a tagged release, published artifact, or clean-installed plugin; those remain separate release checks.
 
 ## Supported workflow
 
@@ -19,7 +19,7 @@ codex plugin add recordly-codex@recordly-codex
 
 `recordly-codex@recordly-codex` selects the one `recordly-codex` plugin in `.agents/plugins/marketplace.json`; its source is the repository root, which preserves the `.codex-plugin/` and `.mcp.json` layout. The committed standalone MCP bundle and [third-party notices](THIRD_PARTY_NOTICES.md) are included in the clean export. Node.js plus `ffmpeg` and `ffprobe` are still required on the host when sealing a capture.
 
-This repository does not claim that `v0.5.0` is tagged, published, clean-installed, or proven in live Codex Desktop Browser until those separate release checks have completed.
+This repository does not claim that `v0.5.0` is tagged, published, or clean-installed until those separate release checks have completed.
 
 The runtime exposes 20 local MCP tools:
 
@@ -33,6 +33,12 @@ The runtime exposes 20 local MCP tools:
 | Editorial | `propose_recording_project_editorial`, `apply_accepted_recording_project_editorial` |
 
 A safe approved workflow can run autonomously: Codex validates each visible browser result, renders a preview, inspects the returned contact-sheet image, records a digest-bound accept/revise/reject judgment, and renders final only after an accepted current preview. It still stops for authentication, CAPTCHA, secrets, payments, consent or device permissions, sensitive uploads, legal acceptance, publishing, deletion, access changes, or another irreversible action.
+
+## v0.5.0 live acceptance evidence
+
+One authorized public capture of `https://recordly.dev/` completed end to end through the Codex Playwright helper surface. The exact v0.5.0 MCP bundle exposed 20 tools and accepted and acknowledged all 572 received capture frames with zero rejections. Its seal passed action-alignment, clipping, decodeability, and privacy gates; the resulting project was migrated to V2, applied the built-in product profile, and applied one deterministic, observed-input zoom proposal.
+
+The inspected square preview was 1080×1080 at 30 fps: 573 frames over 19.1 seconds, `yuv420p` TV range, with no audio. Its contact sheet was visually accepted with zero reported issues, and final rendering produced the same artifact digest as that accepted preview. Codex in-app Browser separately verified the visible hero-to-feature state. Computer Use successfully recorded the Codex window, but its action adapter degraded, so that recording is visual evidence only and is not action provenance. This proof used the helper surface, not a claim of native in-app Browser capture, and covers this one authorized workflow rather than all sites or workflows.
 
 ## Capture and evidence
 

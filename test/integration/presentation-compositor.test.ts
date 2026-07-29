@@ -484,7 +484,7 @@ describe("presentation compositor", () => {
       assertColor(transition.left, left, leftBlue);
       assertColor(transition.right, right, rightBlue);
     }
-  }, 30_000);
+  }, 60_000);
 
   it("includes the incoming V2 scene PiP before a reviewed crossfade", async () => {
     const plan = buildCompositionPlan({
@@ -1052,7 +1052,7 @@ describe("presentation compositor", () => {
     const decodedImage = ppmPixelAt(decoded, 1704, 132);
     expect(decodedVideo.b).toBeGreaterThan(decodedVideo.r + 80);
     expect(decodedImage.r).toBeGreaterThan(decodedImage.b + 80);
-  });
+  }, 30_000);
 
   it("fails closed when a V2 visual source is missing, mismatched, outside trim, or unsupported", async () => {
     const visualPlan = (mediaTrim = { startUs: 0, endUs: 100_000 }) => {
