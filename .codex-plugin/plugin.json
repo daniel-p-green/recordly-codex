@@ -1,6 +1,6 @@
 {
   "name": "recordly-codex",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "description": "Codex Desktop Browser guidance and local MCP tools for approved evidence-backed website recordings.",
   "author": {
     "name": "Daniel P. Green",
@@ -14,15 +14,17 @@
   "mcpServers": "./.mcp.json",
   "interface": {
     "displayName": "Recordly Codex",
-    "shortDescription": "Create approved browser recordings with local quality gates.",
-    "longDescription": "Guides Codex Desktop Browser through approved URL-and-objective recording sessions, with local brokered capture evidence and deterministic delivery checks.",
+    "shortDescription": "Create approved browser recordings with observed-action quality gates.",
+    "longDescription": "Guides Codex Desktop Browser through approved URL-and-objective recording sessions, with local broker-timed trusted-click and trusted-wheel-derived scroll evidence, temporal visible-result checks, decoded clipping QA, and deterministic delivery.",
     "developerName": "Daniel P. Green",
     "category": "Productivity",
     "capabilities": [
       "Browser-directed capture helpers",
+      "Automatic broker-timed trusted-click and trusted-wheel-derived scroll evidence",
+      "Temporal visible-result and clipping QA",
       "Local evidence-backed sessions",
       "Deterministic 1080p delivery",
-      "Quality-gated workflows"
+      "Fail-closed approval workflows"
     ],
     "defaultPrompt": [
       "Record this approved URL and objective with Recordly Codex.",

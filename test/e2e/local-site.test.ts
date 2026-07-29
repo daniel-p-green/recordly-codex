@@ -21,6 +21,7 @@ describe("local public-site recording fixture", () => {
         width: 1920,
         height: 1080,
         pixelFormat: "yuv420p",
+        colorRange: "tv",
         fps: 30,
         frameCount: 30,
         durationSeconds: 1,

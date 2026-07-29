@@ -23,6 +23,7 @@ export type SessionPaths = {
   request: string;
   captureConfig: string;
   rawCaptureEvents: string;
+  observedEvents: string;
   telemetry: string;
   startWrapper: string;
   stopWrapper: string;
@@ -272,6 +273,7 @@ export class SessionStore {
         }),
       );
       await this.writeAtomically(paths.telemetry, "");
+      await this.writeAtomically(paths.observedEvents, "");
       await this.writeAtomically(paths.startWrapper, this.wrapper("start", paths.captureConfig));
       await this.writeAtomically(paths.stopWrapper, this.wrapper("stop", paths.captureConfig));
     } catch (error) {
@@ -420,6 +422,7 @@ export class SessionStore {
       request: this.containedPath(sessionId, "request.sanitized.json"),
       captureConfig: this.containedPath(sessionId, "capture-config.json"),
       rawCaptureEvents: this.containedPath(sessionId, "capture-events.jsonl"),
+      observedEvents: this.containedPath(sessionId, "observed-events.jsonl"),
       telemetry: this.containedPath(sessionId, "telemetry.ndjson"),
       startWrapper: this.browserHelperPath(sessionId, "browser-start.mjs"),
       stopWrapper: this.browserHelperPath(sessionId, "browser-stop.mjs"),
@@ -494,6 +497,7 @@ export class SessionStore {
       this.assertRegularFile(paths.metadata, "session metadata"),
       this.assertRegularFile(paths.request, "sanitized request"),
       this.assertRegularFile(paths.telemetry, "telemetry evidence"),
+      this.assertRegularFile(paths.observedEvents, "observed browser events"),
       this.assertRegularFile(paths.captureConfig, "capture configuration"),
       this.assertRegularFile(paths.startWrapper, "browser start wrapper"),
       this.assertRegularFile(paths.stopWrapper, "browser stop wrapper"),

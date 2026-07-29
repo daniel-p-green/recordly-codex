@@ -1,7 +1,7 @@
 // biome-ignore-all lint/complexity/useLiteralKeys: sealed evidence is an untrusted persisted boundary.
 import { execFile } from "node:child_process";
 import { createHash, randomUUID } from "node:crypto";
-import { chmod, lstat, mkdir, readFile, rename, rm, writeFile } from "node:fs/promises";
+import { chmod, lstat, mkdir, readFile, realpath, rename, rm, writeFile } from "node:fs/promises";
 import { isAbsolute, join, relative, resolve } from "node:path";
 import { promisify } from "node:util";
 
@@ -18,6 +18,13 @@ const MAX_FRAMES = FPS * 300;
 const HASH_PATTERN = /^[0-9a-f]{64}$/u;
 const SESSION_PATTERN = /^[A-Za-z0-9][A-Za-z0-9_-]{0,127}$/u;
 const FRAME_PATH_PATTERN = /^frames\/raw\/frame-\d{6}\.(?:jpe?g|png)$/u;
+const ACTION_PRE_WINDOW_US = 500_000;
+const ACTION_RESULT_WINDOW_US = 2_000_000;
+const FINAL_HOLD_MINIMUM_US = 300_000;
+const VISIBLE_CHANGE_THRESHOLD = 0.02;
+const EDGE_DELTA_THRESHOLD = 0.18;
+const COMPOSITION_COLOR_THRESHOLD = 0.08;
+const BORDER_PX = 12;
 
 type JsonObject = Record<string, unknown>;
 
@@ -30,6 +37,22 @@ type CaptureFrame = {
   height: number;
   receiptOffsetUs?: number;
 };
+
+type ObservedAction =
+  | {
+      type: "click";
+      seq: number;
+      receiptOffsetUs: number;
+      data: { x: number; y: number; button: 0 | 1 | 2 };
+    }
+  | {
+      type: "scroll";
+      seq: number;
+      receiptOffsetUs: number;
+      data: { x: number; y: number; deltaX: number; deltaY: number };
+    };
+
+type PpmImage = { width: number; height: number; pixels: Buffer };
 
 type CaptureSummary = {
   origin: string;
@@ -101,6 +124,47 @@ function contained(root: string, path: string): boolean {
   return relation.length > 0 && !relation.startsWith("..") && !isAbsolute(relation);
 }
 
+type VerifiedSessionTree = { root: string; realRoot: string };
+
+async function verifiedSessionTree(
+  artifactRoot: string,
+  sessionRoot: string,
+): Promise<VerifiedSessionTree> {
+  await ownedDirectory(artifactRoot, "artifact root");
+  await ownedDirectory(sessionRoot, "session root");
+  const [realArtifactRoot, realSessionRoot] = await Promise.all([
+    realpath(artifactRoot),
+    realpath(sessionRoot),
+  ]);
+  if (!contained(realArtifactRoot, realSessionRoot)) {
+    throw new SealedSessionRenderError("resolved session path escapes the artifact root");
+  }
+  return { root: sessionRoot, realRoot: realSessionRoot };
+}
+
+async function regularSessionFile(
+  tree: VerifiedSessionTree,
+  path: string,
+  label: string,
+): Promise<void> {
+  if (!contained(tree.root, path)) {
+    throw new SealedSessionRenderError(`${label} escapes the sealed session`);
+  }
+  const segments = relative(tree.root, path).split("/");
+  let ancestor = tree.root;
+  for (const segment of segments.slice(0, -1)) {
+    ancestor = join(ancestor, segment);
+    await ownedDirectory(ancestor, `${label} ancestor`);
+  }
+  await regularFile(path, label);
+  const resolved = await realpath(path).catch(() => {
+    throw new SealedSessionRenderError(`${label} is missing`);
+  });
+  if (!contained(tree.realRoot, resolved)) {
+    throw new SealedSessionRenderError(`${label} resolved path escapes the verified session tree`);
+  }
+}
+
 async function jsonFile(path: string, label: string): Promise<unknown> {
   await regularFile(path, label);
   try {
@@ -166,12 +230,12 @@ async function readSummary(
 }
 
 async function readFrames(
-  sessionRoot: string,
+  tree: VerifiedSessionTree,
   sessionId: string,
   expectedCount: number,
 ): Promise<CaptureFrame[]> {
-  const eventsPath = join(sessionRoot, "capture-events.jsonl");
-  await regularFile(eventsPath, "capture events");
+  const eventsPath = join(tree.root, "capture-events.jsonl");
+  await regularSessionFile(tree, eventsPath, "capture events");
   const content = await readFile(eventsPath, "utf8");
   if (!content.endsWith("\n")) {
     throw new SealedSessionRenderError("capture events must end with a newline");
@@ -222,11 +286,11 @@ async function readFrames(
     ) {
       throw new SealedSessionRenderError(`capture event ${index + 1} is invalid`);
     }
-    const absolutePath = resolve(sessionRoot, imagePath);
-    if (!contained(sessionRoot, absolutePath)) {
+    const absolutePath = resolve(tree.root, imagePath);
+    if (!contained(tree.root, absolutePath)) {
       throw new SealedSessionRenderError("capture frame path escapes the sealed session");
     }
-    await regularFile(absolutePath, `capture frame ${frameId}`);
+    await regularSessionFile(tree, absolutePath, `capture frame ${frameId}`);
     if ((await digest(absolutePath)) !== hash) {
       throw new SealedSessionRenderError(`capture frame ${frameId} hash does not match evidence`);
     }
@@ -265,6 +329,108 @@ async function readFrames(
     }
   }
   return frames;
+}
+
+function finiteCoordinate(value: unknown, label: string): number {
+  if (typeof value !== "number" || !Number.isFinite(value) || Math.abs(value) > 1_000_000) {
+    throw new SealedSessionRenderError(`${label} must be a finite bounded number`);
+  }
+  return value;
+}
+
+async function readObservedActions(
+  sessionRoot: string,
+  sessionId: string,
+): Promise<ObservedAction[]> {
+  const path = join(sessionRoot, "observed-events.jsonl");
+  try {
+    await regularFile(path, "observed events");
+  } catch (error) {
+    if (
+      error instanceof SealedSessionRenderError &&
+      error.message === "observed events is missing"
+    ) {
+      return [];
+    }
+    throw error;
+  }
+  const content = await readFile(path, "utf8");
+  if (content.length === 0) return [];
+  if (!content.endsWith("\n")) {
+    throw new SealedSessionRenderError("observed events must end with a newline");
+  }
+  const lines = content.slice(0, -1).split("\n");
+  if (lines.length > 10_000) {
+    throw new SealedSessionRenderError("observed events exceed the broker persistence bound");
+  }
+  const actions: ObservedAction[] = [];
+  let previousReceiptOffsetUs = -1;
+  for (const [index, line] of lines.entries()) {
+    let parsed: unknown;
+    try {
+      parsed = JSON.parse(line) as unknown;
+    } catch {
+      throw new SealedSessionRenderError(`observed event ${index + 1} is invalid JSON`);
+    }
+    const event = object(parsed, `observed event ${index + 1}`);
+    exactKeys(
+      event,
+      ["schemaVersion", "sessionId", "seq", "type", "receiptOffsetUs", "data"],
+      `observed event ${index + 1}`,
+    );
+    const seq = integer(event["seq"], "observed event sequence");
+    const receiptOffsetUs = integer(event["receiptOffsetUs"], "observed event receipt offset");
+    if (
+      event["schemaVersion"] !== 1 ||
+      event["sessionId"] !== sessionId ||
+      seq !== index + 1 ||
+      receiptOffsetUs <= previousReceiptOffsetUs
+    ) {
+      throw new SealedSessionRenderError(`observed event ${index + 1} ordering is invalid`);
+    }
+    previousReceiptOffsetUs = receiptOffsetUs;
+    const data = object(event["data"], `observed event ${index + 1} data`);
+    if (event["type"] === "click") {
+      exactKeys(data, ["x", "y", "button"], `observed event ${index + 1} click data`);
+      const button = data["button"];
+      if (button !== 0 && button !== 1 && button !== 2) {
+        throw new SealedSessionRenderError("observed click button is invalid");
+      }
+      actions.push({
+        type: "click",
+        seq,
+        receiptOffsetUs,
+        data: {
+          x: finiteCoordinate(data["x"], "observed click x"),
+          y: finiteCoordinate(data["y"], "observed click y"),
+          button,
+        },
+      });
+      continue;
+    }
+    if (event["type"] === "scroll") {
+      exactKeys(data, ["x", "y", "deltaX", "deltaY"], `observed event ${index + 1} scroll data`);
+      const deltaX = finiteCoordinate(data["deltaX"], "observed scroll deltaX");
+      const deltaY = finiteCoordinate(data["deltaY"], "observed scroll deltaY");
+      if (deltaX === 0 && deltaY === 0) {
+        throw new SealedSessionRenderError("observed scroll delta must be nonzero");
+      }
+      actions.push({
+        type: "scroll",
+        seq,
+        receiptOffsetUs,
+        data: {
+          x: finiteCoordinate(data["x"], "observed scroll x"),
+          y: finiteCoordinate(data["y"], "observed scroll y"),
+          deltaX,
+          deltaY,
+        },
+      });
+      continue;
+    }
+    throw new SealedSessionRenderError(`observed event ${index + 1} type is unsupported`);
+  }
+  return actions;
 }
 
 function cfrFrames(frames: readonly CaptureFrame[]): {
@@ -360,6 +526,8 @@ async function encode(
     "yuv420p",
     "-color_range",
     "tv",
+    "-bsf:v",
+    "h264_metadata=video_full_range_flag=0",
     "-movflags",
     "+faststart",
     "-frames:v",
@@ -400,6 +568,439 @@ async function sampleFrame(
   await regularFile(outputPath, "decoded QA sample");
 }
 
+async function sampleScaledFrame(
+  videoPath: string,
+  frameIndex: number,
+  outputPath: string,
+): Promise<PpmImage> {
+  const ffmpeg = await resolveMediaExecutable("ffmpeg");
+  await execFileAsync(ffmpeg, [
+    "-hide_banner",
+    "-loglevel",
+    "error",
+    "-i",
+    videoPath,
+    "-vf",
+    `select=eq(n\\,${frameIndex}),scale=160:90`,
+    "-vsync",
+    "0",
+    "-frames:v",
+    "1",
+    "-f",
+    "image2",
+    "-vcodec",
+    "ppm",
+    "-y",
+    outputPath,
+  ]);
+  await chmod(outputPath, 0o600);
+  return parsePpm(await readFile(outputPath));
+}
+
+async function decodeSourceFrame(inputPath: string, outputPath: string): Promise<PpmImage> {
+  const ffmpeg = await resolveMediaExecutable("ffmpeg");
+  await execFileAsync(ffmpeg, [
+    "-hide_banner",
+    "-loglevel",
+    "error",
+    "-i",
+    inputPath,
+    "-frames:v",
+    "1",
+    "-f",
+    "image2",
+    "-vcodec",
+    "ppm",
+    "-y",
+    outputPath,
+  ]);
+  await chmod(outputPath, 0o600);
+  return parsePpm(await readFile(outputPath));
+}
+
+function parsePpm(buffer: Buffer): PpmImage {
+  let offset = 0;
+  const token = (): string => {
+    while (offset < buffer.length) {
+      const byte = buffer[offset] as number;
+      if (byte === 35) {
+        while (offset < buffer.length && buffer[offset] !== 10) offset += 1;
+      } else if (byte <= 32) {
+        offset += 1;
+      } else {
+        break;
+      }
+    }
+    const start = offset;
+    while (offset < buffer.length && (buffer[offset] as number) > 32) offset += 1;
+    return buffer.subarray(start, offset).toString("ascii");
+  };
+  if (token() !== "P6") throw new SealedSessionRenderError("decoded QA frame must be binary PPM");
+  const width = Number(token());
+  const height = Number(token());
+  if (!Number.isSafeInteger(width) || !Number.isSafeInteger(height) || token() !== "255") {
+    throw new SealedSessionRenderError("decoded QA frame has invalid PPM geometry");
+  }
+  if (buffer[offset] === 13 && buffer[offset + 1] === 10) {
+    offset += 2;
+  } else if ((buffer[offset] as number) <= 32) {
+    offset += 1;
+  }
+  const pixels = buffer.subarray(offset);
+  if (pixels.length !== width * height * 3) {
+    throw new SealedSessionRenderError("decoded QA frame has invalid PPM pixel data");
+  }
+  return { width, height, pixels };
+}
+
+function visibleChange(first: PpmImage, second: PpmImage): number {
+  if (first.width !== second.width || first.height !== second.height) {
+    throw new SealedSessionRenderError("decoded comparison frames must have matching geometry");
+  }
+  let delta = 0;
+  for (let index = 0; index < first.pixels.length; index += 1) {
+    delta += Math.abs((first.pixels[index] as number) - (second.pixels[index] as number));
+  }
+  return Number((delta / (first.pixels.length * 255)).toFixed(6));
+}
+
+function nearestSlotIndex(slots: readonly { tUs: number }[], receiptOffsetUs: number): number {
+  let selected = 0;
+  for (let index = 1; index < slots.length; index += 1) {
+    if (
+      Math.abs((slots[index] as { tUs: number }).tUs - receiptOffsetUs) <
+      Math.abs((slots[selected] as { tUs: number }).tUs - receiptOffsetUs)
+    ) {
+      selected = index;
+    }
+  }
+  return selected;
+}
+
+async function assessActionAlignment(input: {
+  actions: readonly ObservedAction[];
+  frames: readonly CaptureFrame[];
+  slots: readonly { tUs: number; sourceFrameId: number }[];
+  timingMode: TimingMode;
+  videoPath: string;
+  workRoot: string;
+}): Promise<{
+  status: "pass" | "fail";
+  visibleChangeThreshold: number;
+  preActionWindowUs: number;
+  resultWindowUs: number;
+  finalHoldMinimumUs: number;
+  proofScope: string;
+  events: Array<{
+    type: "click" | "scroll";
+    actionFrameIndex: number;
+    preFrameIndex?: number;
+    resultFrameIndex?: number;
+    visibleChange?: number;
+    finalHoldUs?: number;
+    status: "pass" | "fail";
+  }>;
+}> {
+  const report = {
+    status: "fail" as "pass" | "fail",
+    visibleChangeThreshold: VISIBLE_CHANGE_THRESHOLD,
+    preActionWindowUs: ACTION_PRE_WINDOW_US,
+    resultWindowUs: ACTION_RESULT_WINDOW_US,
+    finalHoldMinimumUs: FINAL_HOLD_MINIMUM_US,
+    proofScope: "temporal visible-result alignment; causal semantics are not asserted",
+    events: [] as Array<{
+      type: "click" | "scroll";
+      actionFrameIndex: number;
+      preFrameIndex?: number;
+      resultFrameIndex?: number;
+      visibleChange?: number;
+      finalHoldUs?: number;
+      status: "pass" | "fail";
+    }>,
+  };
+  if (input.timingMode !== "broker-receipt-offsets" || input.actions.length === 0) return report;
+  const byId = new Map(input.frames.map((frame) => [frame.frameId, frame]));
+  const decoded = new Map<number, PpmImage>();
+  const decode = async (frameIndex: number): Promise<PpmImage> => {
+    const cached = decoded.get(frameIndex);
+    if (cached !== undefined) return cached;
+    const image = await sampleScaledFrame(
+      input.videoPath,
+      frameIndex,
+      join(input.workRoot, `action-${frameIndex}.ppm`),
+    );
+    decoded.set(frameIndex, image);
+    return image;
+  };
+  for (const action of input.actions) {
+    const actionFrameIndex = nearestSlotIndex(input.slots, action.receiptOffsetUs);
+    let preFrameIndex = -1;
+    for (let index = 0; index < input.slots.length; index += 1) {
+      const slot = input.slots[index] as { tUs: number };
+      if (
+        slot.tUs < action.receiptOffsetUs &&
+        slot.tUs >= action.receiptOffsetUs - ACTION_PRE_WINDOW_US
+      ) {
+        preFrameIndex = index;
+      }
+    }
+    if (preFrameIndex < 0) {
+      report.events.push({ type: action.type, actionFrameIndex, status: "fail" });
+      continue;
+    }
+    const pre = await decode(preFrameIndex);
+    const preSource = byId.get(
+      (input.slots[preFrameIndex] as { sourceFrameId: number }).sourceFrameId,
+    );
+    let resultFrameIndex: number | undefined;
+    let change: number | undefined;
+    for (let index = actionFrameIndex + 1; index < input.slots.length; index += 1) {
+      const slot = input.slots[index] as { tUs: number; sourceFrameId: number };
+      if (slot.tUs <= action.receiptOffsetUs) continue;
+      if (slot.tUs > action.receiptOffsetUs + ACTION_RESULT_WINDOW_US) break;
+      const candidateSource = byId.get(slot.sourceFrameId);
+      if (candidateSource?.sha256 === preSource?.sha256) continue;
+      const measured = visibleChange(pre, await decode(index));
+      if (measured >= VISIBLE_CHANGE_THRESHOLD) {
+        resultFrameIndex = index;
+        change = measured;
+        break;
+      }
+    }
+    if (resultFrameIndex === undefined || change === undefined) {
+      report.events.push({
+        type: action.type,
+        actionFrameIndex,
+        preFrameIndex,
+        status: "fail",
+      });
+      continue;
+    }
+    const finalHoldUs =
+      (input.slots.at(-1) as { tUs: number }).tUs -
+      (input.slots[resultFrameIndex] as { tUs: number }).tUs;
+    report.events.push({
+      type: action.type,
+      actionFrameIndex,
+      preFrameIndex,
+      resultFrameIndex,
+      visibleChange: change,
+      finalHoldUs,
+      status: finalHoldUs >= FINAL_HOLD_MINIMUM_US ? "pass" : "fail",
+    });
+  }
+  report.status =
+    report.events.length === input.actions.length &&
+    report.events.every((event) => event.status === "pass")
+      ? "pass"
+      : "fail";
+  return report;
+}
+
+type Rgb = { r: number; g: number; b: number };
+
+function meanRegion(
+  image: PpmImage,
+  xValue: number,
+  yValue: number,
+  widthValue: number,
+  heightValue: number,
+): Rgb {
+  const left = Math.max(0, Math.floor(xValue));
+  const top = Math.max(0, Math.floor(yValue));
+  const right = Math.min(image.width, Math.ceil(xValue + widthValue));
+  const bottom = Math.min(image.height, Math.ceil(yValue + heightValue));
+  if (left >= right || top >= bottom) {
+    throw new SealedSessionRenderError("decoded clipping sample region is empty");
+  }
+  let r = 0;
+  let g = 0;
+  let b = 0;
+  let count = 0;
+  for (let y = top; y < bottom; y += 1) {
+    for (let x = left; x < right; x += 1) {
+      const offset = (y * image.width + x) * 3;
+      r += image.pixels[offset] as number;
+      g += image.pixels[offset + 1] as number;
+      b += image.pixels[offset + 2] as number;
+      count += 1;
+    }
+  }
+  return { r: r / count, g: g / count, b: b / count };
+}
+
+function colorDelta(first: Rgb, second: Rgb): number {
+  return (
+    (Math.abs(first.r - second.r) + Math.abs(first.g - second.g) + Math.abs(first.b - second.b)) /
+    (3 * 255)
+  );
+}
+
+function expectedContentRect(
+  sourceWidth: number,
+  sourceHeight: number,
+): {
+  x: number;
+  y: number;
+  width: number;
+  height: number;
+  outerX: number;
+  outerY: number;
+  outerWidth: number;
+  outerHeight: number;
+} {
+  const scale = Math.min(1740 / sourceWidth, 980 / sourceHeight);
+  const width = Math.max(2, Math.floor((sourceWidth * scale) / 2) * 2);
+  const height = Math.max(2, Math.floor((sourceHeight * scale) / 2) * 2);
+  const outerWidth = width + BORDER_PX * 2;
+  const outerHeight = height + BORDER_PX * 2;
+  const outerX = Math.floor((OUTPUT_WIDTH - outerWidth) / 2);
+  const outerY = Math.floor((OUTPUT_HEIGHT - outerHeight) / 2);
+  return {
+    x: outerX + BORDER_PX,
+    y: outerY + BORDER_PX,
+    width,
+    height,
+    outerX,
+    outerY,
+    outerWidth,
+    outerHeight,
+  };
+}
+
+function edgeMeans(
+  image: PpmImage,
+  rect: { x: number; y: number; width: number; height: number },
+): Rgb[] {
+  const stripe = Math.max(2, Math.min(4, Math.floor(Math.min(rect.width, rect.height) / 20)));
+  return [
+    meanRegion(image, rect.x + rect.width * 0.1, rect.y, rect.width * 0.8, stripe),
+    meanRegion(
+      image,
+      rect.x + rect.width - stripe,
+      rect.y + rect.height * 0.1,
+      stripe,
+      rect.height * 0.8,
+    ),
+    meanRegion(
+      image,
+      rect.x + rect.width * 0.1,
+      rect.y + rect.height - stripe,
+      rect.width * 0.8,
+      stripe,
+    ),
+    meanRegion(image, rect.x, rect.y + rect.height * 0.1, stripe, rect.height * 0.8),
+  ];
+}
+
+async function assessClipping(input: {
+  frames: readonly CaptureFrame[];
+  slots: readonly { sourceFrameId: number }[];
+  samplePaths: { opening: string; midpoint: string; final: string };
+  workRoot: string;
+}): Promise<{
+  status: "pass" | "fail";
+  borderPx: number;
+  expectedContentRect: { x: number; y: number; width: number; height: number };
+  thresholds: {
+    maxEdgeColorDelta: number;
+    maxCompositionColorDelta: number;
+    maxAspectError: number;
+  };
+  samples: Array<{
+    frameIndex: number;
+    sourceFrameId: number;
+    edgesPresent: boolean;
+    maxEdgeColorDelta: number;
+    maxBorderColorDelta: number;
+    maxMatteColorDelta: number;
+    aspectError: number;
+    status: "pass" | "fail";
+  }>;
+}> {
+  const first = input.frames[0] as CaptureFrame;
+  const rect = expectedContentRect(first.width, first.height);
+  const frameIndices = [0, Math.floor((input.slots.length - 1) / 2), input.slots.length - 1];
+  const outputPaths = [
+    input.samplePaths.opening,
+    input.samplePaths.midpoint,
+    input.samplePaths.final,
+  ];
+  const byId = new Map(input.frames.map((frame) => [frame.frameId, frame]));
+  const samples = [];
+  for (let sampleIndex = 0; sampleIndex < frameIndices.length; sampleIndex += 1) {
+    const frameIndex = frameIndices[sampleIndex] as number;
+    const sourceFrameId = (input.slots[frameIndex] as { sourceFrameId: number }).sourceFrameId;
+    const source = byId.get(sourceFrameId);
+    if (source === undefined)
+      throw new SealedSessionRenderError("clipping sample lacks source frame");
+    const output = parsePpm(await readFile(outputPaths[sampleIndex] as string));
+    const decodedSource = await decodeSourceFrame(
+      source.absolutePath,
+      join(input.workRoot, `clipping-source-${sampleIndex}.ppm`),
+    );
+    const sourceEdges = edgeMeans(decodedSource, {
+      x: 0,
+      y: 0,
+      width: decodedSource.width,
+      height: decodedSource.height,
+    });
+    const outputEdges = edgeMeans(output, rect);
+    const maxEdgeColorDelta = Math.max(
+      ...sourceEdges.map((edge, index) => colorDelta(edge, outputEdges[index] as Rgb)),
+    );
+    const lightBorder = { r: 248, g: 250, b: 252 };
+    const darkMatte = { r: 15, g: 23, b: 42 };
+    const borderColors = [
+      meanRegion(output, rect.x + rect.width / 2 - 8, rect.y - 8, 16, 4),
+      meanRegion(output, rect.x + rect.width + 4, rect.y + rect.height / 2 - 8, 4, 16),
+      meanRegion(output, rect.x + rect.width / 2 - 8, rect.y + rect.height + 4, 16, 4),
+      meanRegion(output, rect.x - 8, rect.y + rect.height / 2 - 8, 4, 16),
+    ];
+    const matteColors = [
+      meanRegion(output, 8, 8, 12, 12),
+      meanRegion(output, output.width - 20, 8, 12, 12),
+      meanRegion(output, 8, output.height - 20, 12, 12),
+      meanRegion(output, output.width - 20, output.height - 20, 12, 12),
+    ];
+    const maxBorderColorDelta = Math.max(
+      ...borderColors.map((color) => colorDelta(color, lightBorder)),
+    );
+    const maxMatteColorDelta = Math.max(
+      ...matteColors.map((color) => colorDelta(color, darkMatte)),
+    );
+    const aspectError =
+      Math.abs(rect.width / rect.height - first.width / first.height) /
+      (first.width / first.height);
+    const pass =
+      maxEdgeColorDelta <= EDGE_DELTA_THRESHOLD &&
+      maxBorderColorDelta <= COMPOSITION_COLOR_THRESHOLD &&
+      maxMatteColorDelta <= COMPOSITION_COLOR_THRESHOLD &&
+      aspectError <= 0.005;
+    samples.push({
+      frameIndex,
+      sourceFrameId,
+      edgesPresent: pass,
+      maxEdgeColorDelta: Number(maxEdgeColorDelta.toFixed(6)),
+      maxBorderColorDelta: Number(maxBorderColorDelta.toFixed(6)),
+      maxMatteColorDelta: Number(maxMatteColorDelta.toFixed(6)),
+      aspectError: Number(aspectError.toFixed(6)),
+      status: pass ? ("pass" as const) : ("fail" as const),
+    });
+  }
+  return {
+    status: samples.every((sample) => sample.status === "pass") ? "pass" : "fail",
+    borderPx: BORDER_PX,
+    expectedContentRect: { x: rect.x, y: rect.y, width: rect.width, height: rect.height },
+    thresholds: {
+      maxEdgeColorDelta: EDGE_DELTA_THRESHOLD,
+      maxCompositionColorDelta: COMPOSITION_COLOR_THRESHOLD,
+      maxAspectError: 0.005,
+    },
+    samples,
+  };
+}
+
 async function writeCanonical(path: string, value: unknown): Promise<void> {
   await writeFile(path, `${canonicalJson(value)}\n`, { mode: 0o600 });
 }
@@ -420,15 +1021,15 @@ export async function renderSealedSession(input: {
   if (!contained(artifactRoot, sessionRoot)) {
     throw new SealedSessionRenderError("session path escapes the artifact root");
   }
-  await ownedDirectory(artifactRoot, "artifact root");
-  await ownedDirectory(sessionRoot, "session root");
+  const tree = await verifiedSessionTree(artifactRoot, sessionRoot);
   await readMetadata(sessionRoot, input.sessionId);
   const request = validateRecordingRequest(
     await jsonFile(join(sessionRoot, "request.sanitized.json"), "sanitized request"),
   );
   const origin = new URL(request.url).origin;
   const summary = await readSummary(sessionRoot, input.sessionId, origin);
-  const frames = await readFrames(sessionRoot, input.sessionId, summary.acceptedFrames);
+  const frames = await readFrames(tree, input.sessionId, summary.acceptedFrames);
+  const observedActions = await readObservedActions(sessionRoot, input.sessionId);
   const telemetryPath = join(sessionRoot, "telemetry.ndjson");
   await regularFile(telemetryPath, "semantic telemetry");
   const telemetryText = await readFile(telemetryPath, "utf8");
@@ -454,6 +1055,8 @@ export async function renderSealedSession(input: {
       probe.fps !== FPS ||
       probe.frameCount !== timeline.slots.length ||
       Math.abs(probe.durationSeconds - expectedDuration) > 0.001 ||
+      probe.pixelFormat !== "yuv420p" ||
+      probe.colorRange !== "tv" ||
       probe.hasAudio
     ) {
       throw new SealedSessionRenderError("encoded video does not meet the CFR delivery contract");
@@ -479,7 +1082,25 @@ export async function renderSealedSession(input: {
     const distinctSourceFrames = new Set(frames.map((frame) => frame.sha256)).size;
     const distinctSamples = new Set(Object.values(sampleHashes)).size;
     const frozen = distinctSourceFrames < 2 || distinctSamples < 2;
-    const approved = timeline.mode === "broker-receipt-offsets" && !frozen;
+    const actionAlignment = await assessActionAlignment({
+      actions: observedActions,
+      frames,
+      slots: timeline.slots,
+      timingMode: timeline.mode,
+      videoPath,
+      workRoot,
+    });
+    const clipping = await assessClipping({
+      frames,
+      slots: timeline.slots,
+      samplePaths,
+      workRoot,
+    });
+    const approved =
+      timeline.mode === "broker-receipt-offsets" &&
+      !frozen &&
+      actionAlignment.status === "pass" &&
+      clipping.status === "pass";
     const videoSha256 = await digest(videoPath);
     const eventCounts = Object.fromEntries(
       [...new Set(semanticEvents.map((event) => event.type))]
@@ -513,6 +1134,23 @@ export async function renderSealedSession(input: {
         reason: "semantic events lack a broker receipt offset",
         eventCounts,
       },
+      observedActions: observedActions.map((action) =>
+        action.type === "click"
+          ? {
+              type: action.type,
+              x: action.data.x,
+              y: action.data.y,
+              cfrFrameIndex: nearestSlotIndex(timeline.slots, action.receiptOffsetUs),
+            }
+          : {
+              type: action.type,
+              x: action.data.x,
+              y: action.data.y,
+              deltaX: action.data.deltaX,
+              deltaY: action.data.deltaY,
+              cfrFrameIndex: nearestSlotIndex(timeline.slots, action.receiptOffsetUs),
+            },
+      ),
       timeline: {
         schemaVersion: 1,
         fps: FPS,
@@ -526,6 +1164,7 @@ export async function renderSealedSession(input: {
         height: OUTPUT_HEIGHT,
         codec: "h264",
         pixelFormat: "yuv420p",
+        colorRange: "tv",
         audio: false,
         aspectPolicy: "contain",
       },
@@ -537,7 +1176,11 @@ export async function renderSealedSession(input: {
     const quality = {
       schemaVersion: 1,
       kind: "recordly-codex-quality-report",
-      status: approved ? "approved" : frozen ? "blocked" : "candidate",
+      status: approved
+        ? "approved"
+        : timeline.mode === "legacy_ordered_cfr"
+          ? "candidate"
+          : "blocked",
       timing: {
         mode: timeline.mode,
         eligibleForApproval: timeline.mode === "broker-receipt-offsets",
@@ -554,6 +1197,8 @@ export async function renderSealedSession(input: {
         distinctSourceFrames,
         distinctSamples,
       },
+      actionAlignment,
+      clipping,
       finalState: {
         present: true,
         sourceFrameId: (timeline.slots.at(-1) as { sourceFrameId: number }).sourceFrameId,

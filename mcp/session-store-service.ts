@@ -293,6 +293,7 @@ async function startBroker(
     const helperInput = {
       sessionId: inspection.sessionId,
       endpoint: broker.endpoint,
+      origin: state.origin,
     };
     await writeBrowserHelper(inspection.paths.startWrapper, browserStartHelper(helperInput));
     await writeBrowserHelper(inspection.paths.stopWrapper, browserStopHelper(helperInput));

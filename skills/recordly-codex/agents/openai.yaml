@@ -1,6 +1,6 @@
 interface:
   display_name: "Recordly Codex"
-  short_description: "Create approved browser recordings with evidence gates"
-  default_prompt: "Use $recordly-codex to record this approved website flow from URL to quality-checked delivery."
+  short_description: "Create approved recordings with observed-action QA"
+  default_prompt: "Use $recordly-codex to record this approved website flow with broker-timed trusted-click and trusted-wheel-derived scroll evidence plus fail-closed quality checks."
 policy:
   allow_implicit_invocation: true

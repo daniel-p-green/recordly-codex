@@ -277,6 +277,7 @@ describe("recordly Codex MCP handlers", () => {
         clockUs: () => 100,
       });
       const created = await first.create(createInput);
+      const startHelper = await readFile(created.browserStartHelperPath, "utf8");
       const resumed = createSessionStoreService({ artifactRoot, clockUs: () => 100 });
 
       await Promise.all([
@@ -294,6 +295,8 @@ describe("recordly Codex MCP handlers", () => {
         .map((line) => JSON.parse(line) as { seq: number; tUs: number; sessionId: string });
 
       expect(inspected.requestId).toBe(created.requestId);
+      expect(startHelper).toContain('const recordingOrigin = "https://demo.example";');
+      expect(startHelper).not.toContain("new URL");
       expect(inspected.eventCount).toBe(2);
       expect((await lstat(artifactRoot)).mode & 0o777).toBe(0o700);
       expect((await lstat(join(artifactRoot, ".recordly-codex-owner-token"))).mode & 0o777).toBe(

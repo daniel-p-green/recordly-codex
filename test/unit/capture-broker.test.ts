@@ -1,9 +1,9 @@
-import { mkdtemp, readFile, rm } from "node:fs/promises";
+import { lstat, mkdtemp, readFile, rm, symlink, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { Readable } from "node:stream";
 
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 
 import { createCaptureBroker } from "../../mcp/capture-broker.js";
 
@@ -39,8 +39,325 @@ async function broker(clockUs?: () => number) {
 }
 
 const identity = { sessionId: "session-001", url: "https://recordly.dev/" };
+const observedIdentity = { sessionId: "session-001", origin: "https://recordly.dev" };
+
+function framePayload(sessionId: number) {
+  return {
+    ...identity,
+    frame: {
+      data: Buffer.from(`safe frame ${sessionId}`).toString("base64"),
+      sessionId,
+      metadata: { deviceWidth: 1440, deviceHeight: 900 },
+    },
+  };
+}
 
 describe("loopback capture broker", () => {
+  it("issues bounded fresh observer challenges only after a durable baseline without persisting markers", async () => {
+    const { root, phases, instance, post } = await broker();
+    const logs = (["debug", "info", "log", "warn", "error"] as const).map((method) =>
+      vi.spyOn(console, method),
+    );
+    try {
+      const challenge = (
+        documentEpoch: unknown,
+        token?: string,
+        documentUrl = "https://recordly.dev/workflows/approved?view=recording#capture",
+      ) => post("/observer-challenge", { ...observedIdentity, documentEpoch, documentUrl }, token);
+
+      expect((await challenge(1)).status).toBe(403);
+      const claim = await post("/claim", identity);
+      const token = ((await claim.json()) as { token: string }).token;
+      expect((await challenge(1, "wrong")).status).toBe(403);
+      expect(
+        (
+          await post(
+            "/observer-challenge",
+            {
+              ...observedIdentity,
+              sessionId: "other",
+              documentEpoch: 1,
+              documentUrl: "https://recordly.dev/approved",
+            },
+            token,
+          )
+        ).status,
+      ).toBe(400);
+      expect(
+        (
+          await post(
+            "/observer-challenge",
+            {
+              ...observedIdentity,
+              origin: "https://other.example",
+              documentEpoch: 1,
+              documentUrl: "https://recordly.dev/approved",
+            },
+            token,
+          )
+        ).status,
+      ).toBe(403);
+      expect(
+        (
+          await post(
+            "/observer-challenge",
+            {
+              ...observedIdentity,
+              documentEpoch: 1,
+              documentUrl: "https://recordly.dev/approved",
+              extra: true,
+            },
+            token,
+          )
+        ).status,
+      ).toBe(400);
+      expect((await challenge(1.5, token)).status).toBe(400);
+      expect((await challenge(1, token)).status).toBe(409);
+      await expect(post("/frame", framePayload(1), token)).resolves.toMatchObject({ status: 200 });
+
+      const markers: string[] = [];
+      const approved = await challenge(1, token);
+      expect(approved.status).toBe(200);
+      const approvedResult = (await approved.json()) as { ok: boolean; marker: string };
+      expect(approvedResult.marker).toMatch(/^[0-9a-f]{64}$/u);
+      markers.push(approvedResult.marker);
+
+      for (const documentUrl of [
+        "https://other.example/workflow",
+        "https://user:pass@recordly.dev/workflow",
+        "javascript:alert(1)",
+        "about:blank",
+        "data:text/html,recordly",
+        "not a URL",
+      ]) {
+        const rejected = await challenge(2, token, documentUrl);
+        expect(rejected.status).toBe(documentUrl.startsWith("https://other.example") ? 403 : 400);
+        expect(await rejected.json()).toEqual({ ok: false });
+      }
+
+      for (const documentEpoch of Array.from({ length: 31 }, (_, index) => index + 2)) {
+        const response = await challenge(documentEpoch, token);
+        expect(response.status).toBe(200);
+        const result = (await response.json()) as { ok: boolean; marker: string };
+        expect(result.ok).toBe(true);
+        expect(result.marker).toMatch(/^[0-9a-f]{64}$/u);
+        markers.push(result.marker);
+      }
+      expect(new Set(markers)).toHaveLength(32);
+      expect((await challenge(33, token)).status).toBe(429);
+      expect(phases.at(-1)).toBe("failed");
+      expect((await challenge(34, token)).status).toBe(409);
+
+      await expect(
+        post(
+          "/stop",
+          {
+            ...identity,
+            receivedFrames: 1,
+            acceptedFrames: 1,
+            ackedFrames: 1,
+            rejectedFrames: 0,
+            degradationRequested: false,
+          },
+          token,
+        ),
+      ).resolves.toMatchObject({ status: 200 });
+      const evidence = await Promise.all([
+        readFile(join(root, "capture-summary.json"), "utf8"),
+        readFile(join(root, "capture-events.jsonl"), "utf8"),
+        readFile(join(root, "observed-events.jsonl"), "utf8"),
+      ]);
+      for (const log of logs) expect(log).not.toHaveBeenCalled();
+      for (const marker of markers) expect(evidence.join("\n")).not.toContain(marker);
+    } finally {
+      for (const log of logs) log.mockRestore();
+      await instance.close();
+    }
+  });
+
+  it("rejects observed events before a durable baseline frame, then aligns later events", async () => {
+    const samples = [100, 200, 250, 300];
+    const { phases, instance, post } = await broker(() => samples.shift() ?? 300);
+    try {
+      const claim = await post("/claim", identity);
+      const token = ((await claim.json()) as { token: string }).token;
+      await expect(
+        post(
+          "/observed-event",
+          {
+            ...observedIdentity,
+            event: { type: "click", data: { x: 10, y: 20, button: 0 } },
+          },
+          token,
+        ),
+      ).resolves.toMatchObject({ status: 409 });
+      expect(phases.at(-1)).toBe("failed");
+    } finally {
+      await instance.close();
+    }
+
+    const aligned = await broker(() => samples.shift() ?? 300);
+    try {
+      const claim = await aligned.post("/claim", identity);
+      const alignedToken = ((await claim.json()) as { token: string }).token;
+      await expect(aligned.post("/frame", framePayload(1), alignedToken)).resolves.toMatchObject({
+        status: 200,
+      });
+      await expect(
+        aligned.post(
+          "/observed-event",
+          {
+            ...observedIdentity,
+            event: { type: "click", data: { x: 10, y: 20, button: 0 } },
+          },
+          alignedToken,
+        ),
+      ).resolves.toMatchObject({ status: 200 });
+      await expect(aligned.post("/frame", framePayload(2), alignedToken)).resolves.toMatchObject({
+        status: 200,
+      });
+
+      const frames = (await readFile(join(aligned.root, "capture-events.jsonl"), "utf8"))
+        .trim()
+        .split("\n")
+        .map((line) => JSON.parse(line) as { receiptOffsetUs: number });
+      const observedEvents = (await readFile(join(aligned.root, "observed-events.jsonl"), "utf8"))
+        .trim()
+        .split("\n")
+        .map((line) => JSON.parse(line) as Record<string, unknown>);
+      expect(frames.map((event) => event.receiptOffsetUs)).toEqual([0, 100]);
+      expect(observedEvents).toEqual([
+        {
+          schemaVersion: 1,
+          sessionId: "session-001",
+          seq: 1,
+          type: "click",
+          receiptOffsetUs: 50,
+          data: { x: 10, y: 20, button: 0 },
+        },
+      ]);
+      expect((await lstat(join(aligned.root, "observed-events.jsonl"))).mode & 0o777).toBe(0o600);
+    } finally {
+      await aligned.instance.close();
+    }
+  });
+
+  it("coalesces bounded scroll observations and fails closed for malformed or flooding pages", async () => {
+    const samples = Array.from({ length: 140 }, (_, index) => 1_000 + index);
+    const { root, phases, instance, post } = await broker(() => samples.shift() ?? 2_000);
+    try {
+      const claim = await post("/claim", identity);
+      const token = ((await claim.json()) as { token: string }).token;
+      await expect(post("/frame", framePayload(1), token)).resolves.toMatchObject({ status: 200 });
+      for (const event of [
+        { type: "scroll", data: { x: 0, y: 100, deltaX: 0, deltaY: 100 } },
+        { type: "scroll", data: { x: 0, y: 180, deltaX: 0, deltaY: 80 } },
+      ]) {
+        await expect(
+          post("/observed-event", { ...observedIdentity, event }, token),
+        ).resolves.toMatchObject({ status: 200 });
+      }
+      await expect(post("/frame", framePayload(2), token)).resolves.toMatchObject({ status: 200 });
+      const scroll = JSON.parse(
+        (await readFile(join(root, "observed-events.jsonl"), "utf8")).trim(),
+      ) as Record<string, unknown>;
+      expect(scroll).toMatchObject({
+        seq: 1,
+        type: "scroll",
+        data: { x: 0, y: 180, deltaX: 0, deltaY: 180 },
+      });
+      const malformed = await post(
+        "/observed-event",
+        {
+          ...observedIdentity,
+          event: { type: "click", data: { x: 1_000_001, y: 0, button: 0 } },
+        },
+        token,
+      );
+      expect(malformed.status).toBe(400);
+      expect(phases.at(-1)).toBe("failed");
+    } finally {
+      await instance.close();
+    }
+  });
+
+  it("fails closed when observed-event rate exceeds the bounded broker window", async () => {
+    let sample = 5_000;
+    const { phases, instance, post } = await broker(() => sample++);
+    try {
+      const claim = await post("/claim", identity);
+      const token = ((await claim.json()) as { token: string }).token;
+      await expect(post("/frame", framePayload(1), token)).resolves.toMatchObject({ status: 200 });
+      const click = {
+        ...observedIdentity,
+        event: { type: "click", data: { x: 1, y: 2, button: 0 } },
+      };
+      for (let index = 0; index < 120; index += 1) {
+        expect((await post("/observed-event", click, token)).status).toBe(200);
+      }
+      expect((await post("/observed-event", click, token)).status).toBe(429);
+      expect(phases.at(-1)).toBe("failed");
+    } finally {
+      await instance.close();
+    }
+  });
+
+  it("rejects a zero-delta scroll as a non-action", async () => {
+    const { phases, instance, post } = await broker();
+    try {
+      const claim = await post("/claim", identity);
+      const token = ((await claim.json()) as { token: string }).token;
+      await expect(post("/frame", framePayload(1), token)).resolves.toMatchObject({ status: 200 });
+      const response = await post(
+        "/observed-event",
+        {
+          ...observedIdentity,
+          event: { type: "scroll", data: { x: 0, y: 0, deltaX: 0, deltaY: 0 } },
+        },
+        token,
+      );
+      expect(response.status).toBe(400);
+      expect(phases.at(-1)).toBe("failed");
+    } finally {
+      await instance.close();
+    }
+  });
+
+  it("rejects observed-event identity/auth/body abuse and symlinked persistence", async () => {
+    const { root, instance, post } = await broker();
+    try {
+      const claim = await post("/claim", identity);
+      const token = ((await claim.json()) as { token: string }).token;
+      const click = {
+        ...observedIdentity,
+        event: { type: "click", data: { x: 1, y: 2, button: 0 } },
+      };
+      expect((await post("/observed-event", click)).status).toBe(403);
+      expect((await post("/observed-event", click, "wrong")).status).toBe(403);
+      expect(
+        (await post("/observed-event", { ...click, origin: "https://other.example" }, token))
+          .status,
+      ).toBe(403);
+      const oversized = await post(
+        "/observed-event",
+        { ...click, padding: "x".repeat(5_000) },
+        token,
+      );
+      expect(oversized.status).toBe(413);
+
+      const observedPath = join(root, "observed-events.jsonl");
+      const outside = join(root, "outside.jsonl");
+      await writeFile(outside, "outside\n", { mode: 0o600 });
+      await rm(observedPath);
+      await symlink(outside, observedPath);
+      await expect(post("/frame", framePayload(1), token)).resolves.toMatchObject({ status: 200 });
+      expect((await post("/observed-event", click, token)).status).toBe(500);
+      expect(await readFile(outside, "utf8")).toBe("outside\n");
+    } finally {
+      await instance.close();
+    }
+  });
+
   it("persists strictly monotonic receipt offsets from the broker clock, never page timing", async () => {
     const samples = [2_000, 2_000, 1_999];
     const { root, instance, post } = await broker(() => samples.shift() ?? 1_999);

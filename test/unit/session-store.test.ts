@@ -189,6 +189,8 @@ describe("SessionStore", () => {
     expect((await stat(join(root, "browser-helpers", "session-001"))).mode & 0o777).toBe(0o700);
     expect((await stat(created.paths.startWrapper)).mode & 0o777).toBe(0o600);
     expect(created.paths.rawCaptureEvents).toBe(join(root, "session-001", "capture-events.jsonl"));
+    expect(created.paths.observedEvents).toBe(join(root, "session-001", "observed-events.jsonl"));
+    expect((await stat(created.paths.observedEvents)).mode & 0o777).toBe(0o600);
     await writeFile(
       join(root, "runtime-fixture.mjs"),
       [
@@ -426,6 +428,7 @@ describe("SessionStore", () => {
       "request",
       "telemetry",
       "captureConfig",
+      "observedEvents",
       "startWrapper",
       "stopWrapper",
     ] as const;
