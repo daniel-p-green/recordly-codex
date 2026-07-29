@@ -63,7 +63,7 @@ Record meaningful milestones only. Keep entries concise and evidence-based.
 - Outcome: Added five editable-project MCP tools to the five capture-session tools and documented the intended v0.3.0 package. Projects are canonical full documents with monotonic revisions, bounded automated revision, exact-revision previews, and finals gated on a matching current preview.
 - Verified implementation: The renderer supports MP4/GIF, trims, constant/ramped speed, cuts/crossfades, source-keyed cursor and click effects, manual/automatic zoom, annotations, captions, bounded PPM PiP, bounded WAV audio, declared hooks, and deterministic quality profiles. Capture frames and renderer media are consumed only from private exclusive digest-verified snapshots, with cleanup on success/failure; final publication uses an exclusive contained staging path and atomic rename.
 - Evidence: The integrated suite passes 137 tests across 25 files, including explicit MP4 and GIF project E2E coverage. TypeScript, production build, deterministic bundle, plugin, fixture, and hygiene gates pass. The candidate bundle is 1,050,935 bytes with SHA-256 `97e6afa0001747a3620bec27cd647d16177b9df24c72e8caa7ab75011a440375`.
-- Remaining release gate: Publish v0.3.0, clean-install it from the marketplace, verify exactly ten tools over raw stdio, and repeat an authorized-site Codex Desktop Browser acceptance workflow. Until then, v0.2.0 remains the latest published/install-verified release.
+- Release gate at this milestone: Publish v0.3.0, clean-install it from the marketplace, verify exactly ten tools over raw stdio, and repeat an authorized-site Codex Desktop Browser acceptance workflow. This gate was subsequently closed in the release entry below.
 
 ## 2026-07-29 — v0.3.0 live candidate acceptance passed
 
@@ -72,4 +72,12 @@ Record meaningful milestones only. Keep entries concise and evidence-based.
 - Migration evidence: A missing v0.2 cursor track migrated as an intentionally hidden cursor. Rendering did not depend on a legacy `0644` capture-event log, and proportional legacy screencast frames scaled to the sealed source geometry. Incompatible or unverified evidence remains fail-closed.
 - Project/render evidence: Raw MCP exposed exactly ten tools. The decoded MP4 preview was 1920×1080 at 30 fps for 29.533333 seconds. The project advanced from revision 0 to 1 without recapture; the second preview and final produced the same deterministic SHA.
 - Checks: The full suite passes 138 tests across 25 files. Before this final live-only no-code step, the deterministic 1,053,240-byte bundle had SHA-256 `6ab1455733de81bd8ac259b815f2d428c490335eed4e29ad1bcba5eea2e2a228`; build, typecheck, bundle/plugin, fixture, and hygiene gates were green.
-- Remaining release gate: v0.3.0 is still a candidate. Publish the tag and repeat clean marketplace-install verification before calling it the current released installation.
+- Release gate at this milestone: Publish the tag and repeat clean marketplace-install verification. This gate was subsequently closed in the release entry below.
+
+## 2026-07-29 — v0.3.0 public release and installed verification complete
+
+- Outcome: Merged commit `5e526b71d279eceb65ea24ce9dff6e9e8ecabfc5` to protected `main` and published [v0.3.0](https://github.com/daniel-p-green/recordly-codex/releases/tag/v0.3.0).
+- CI evidence: Main run `30433535484` passed after a Node 22 infrastructure retry.
+- Installed evidence: The plugin is installed and enabled at version 0.3.0. Its server reported 0.3.0, exposed exactly ten tools, passed create/discard smoke, and produced empty stderr.
+- Integrity evidence: The installed bundle SHA-256 matched source at `6ab1455733de81bd8ac259b815f2d428c490335eed4e29ad1bcba5eea2e2a228`.
+- Closeout: No v0.3.0 publication or install gate remains. The documented safety, host, authorization, and parity limitations still apply.

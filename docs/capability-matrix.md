@@ -1,6 +1,6 @@
 # Capability matrix
 
-This matrix describes the intended v0.3.0 release. A capability is supported only when its stated prerequisites and approval gates pass. The implementation and local test suite are verified; v0.3.0 has not yet completed release, clean marketplace-install, or authorized-site acceptance.
+This matrix describes the published and installed v0.3.0 release. A capability is supported only when its stated prerequisites and approval gates pass.
 
 | Area | Supported behavior | Evidence and approval boundary | Not supported or not proven |
 | --- | --- | --- | --- |
@@ -22,4 +22,4 @@ This matrix describes the intended v0.3.0 release. A capability is supported onl
 | Media integrity | Capture frames, PiP, audio, and render publication use private exclusive staging snapshots | The exact bytes copied from one opened regular file are bounded and digest/type checked; consumers use only the snapshot; cleanup runs on success/failure | Treating a previously hashed mutable pathname as trusted input |
 | Privacy and containment | Private roots and event files; delivery metadata omits raw evidence paths/timestamps, target path/query/fragment, credentials, DOM, and page text | Ancestors and files are symlink/containment checked; sensitive artifacts use restrictive permissions | Visual redaction guarantee; authorized pages can still display sensitive pixels |
 
-The published v0.2.0 release remains the latest marketplace-install proof. The v0.3.0 candidate has passed raw ten-tool MCP verification and one authorized Recordly.dev capture-to-project acceptance workflow, but must still complete public release and clean-install verification before becoming a released capability claim.
+The public v0.3.0 release, installed server version, exact ten-tool surface, create/discard smoke, empty stderr, source-matching bundle SHA, and one authorized Recordly.dev capture-to-project workflow are verified. This proves the bounded path above, not arbitrary-site autonomy or unlisted capabilities.
