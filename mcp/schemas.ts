@@ -105,6 +105,20 @@ export const sealRecordingCaptureInputSchema = z.object({ sessionId: identifier 
 export const discardRecordingSessionInputSchema = z
   .object({ sessionId: identifier, reason: safeText(240).optional() })
   .strict();
+export const createRecordingProjectInputSchema = z
+  .object({
+    sessionId: identifier,
+    projectId: identifier.optional(),
+    automatedRevisionLimit: z.number().int().min(0).max(16).optional(),
+  })
+  .strict();
+export const inspectRecordingProjectInputSchema = z.object({ projectId: identifier }).strict();
+export const reviseRecordingProjectInputSchema = z
+  .object({ project: z.unknown(), mode: z.enum(["manual", "automated"]).optional() })
+  .strict();
+export const renderRecordingProjectInputSchema = z
+  .object({ projectId: identifier, revision: z.number().int().nonnegative() })
+  .strict();
 
 const absoluteArtifactPath = z.string().min(2);
 export const sessionOutputSchema = z
@@ -130,7 +144,28 @@ const toolOperationSchema = z.enum([
   "inspect_recording_session",
   "seal_recording_capture",
   "discard_recording_session",
+  "create_recording_project",
+  "inspect_recording_project",
+  "revise_recording_project",
+  "render_recording_project_preview",
+  "render_recording_project_final",
 ]);
+
+const projectOutputSchema = z
+  .object({
+    project: z.unknown(),
+    projectSha256: z.string().regex(/^[a-f0-9]{64}$/u),
+  })
+  .strict();
+const renderOutputSchema = z
+  .object({
+    kind: z.enum(["preview", "final"]),
+    revision: z.number().int().nonnegative(),
+    format: z.enum(["mp4", "gif"]),
+    artifact: safeText(256).regex(/^[A-Za-z0-9][A-Za-z0-9._/-]*$/u),
+    sha256: z.string().regex(/^[a-f0-9]{64}$/u),
+  })
+  .strict();
 
 export const successfulToolOutputSchema = z
   .object({
@@ -157,6 +192,8 @@ export const toolOutputSchema = z
     ok: z.boolean(),
     operation: toolOperationSchema,
     session: sessionOutputSchema.optional(),
+    project: projectOutputSchema.optional(),
+    render: renderOutputSchema.optional(),
     error: z
       .object({ code: z.enum(["invalid_input", "service_unavailable", "operation_failed"]) })
       .strict()
@@ -164,9 +201,36 @@ export const toolOutputSchema = z
   })
   .strict()
   .superRefine((value, context) => {
-    const variant = value.ok ? successfulToolOutputSchema : failedToolOutputSchema;
-    const validated = variant.safeParse(value);
-    if (!validated.success) {
+    if (!value.ok) {
+      const validated = failedToolOutputSchema.safeParse(value);
+      if (!validated.success) {
+        context.addIssue({
+          code: "custom",
+          message: "must match its declared tool result variant",
+        });
+      }
+      return;
+    }
+    const sessionOperation = [
+      "create_recording_session",
+      "record_browser_event",
+      "inspect_recording_session",
+      "seal_recording_capture",
+      "discard_recording_session",
+    ].includes(value.operation);
+    const projectOperation = [
+      "create_recording_project",
+      "inspect_recording_project",
+      "revise_recording_project",
+      "render_recording_project_preview",
+      "render_recording_project_final",
+    ].includes(value.operation);
+    if (
+      (sessionOperation && value.session === undefined) ||
+      (projectOperation && value.project === undefined) ||
+      (projectOperation && value.session !== undefined) ||
+      (value.render !== undefined && !value.operation.startsWith("render_recording_project_"))
+    ) {
       context.addIssue({ code: "custom", message: "must match its declared tool result variant" });
     }
   });
@@ -176,4 +240,8 @@ export type RecordBrowserEventInput = z.infer<typeof recordBrowserEventInputSche
 export type InspectRecordingSessionInput = z.infer<typeof inspectRecordingSessionInputSchema>;
 export type SealRecordingCaptureInput = z.infer<typeof sealRecordingCaptureInputSchema>;
 export type DiscardRecordingSessionInput = z.infer<typeof discardRecordingSessionInputSchema>;
+export type CreateRecordingProjectInput = z.infer<typeof createRecordingProjectInputSchema>;
+export type InspectRecordingProjectInput = z.infer<typeof inspectRecordingProjectInputSchema>;
+export type ReviseRecordingProjectInput = z.infer<typeof reviseRecordingProjectInputSchema>;
+export type RenderRecordingProjectInput = z.infer<typeof renderRecordingProjectInputSchema>;
 export type SuccessfulToolOutput = z.infer<typeof successfulToolOutputSchema>;

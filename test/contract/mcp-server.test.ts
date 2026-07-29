@@ -328,7 +328,7 @@ describe("recordly Codex MCP handlers", () => {
     );
   });
 
-  it("builds the stdio server, exposes five tools, and creates a recording through an SDK client", async () => {
+  it("builds the stdio server, exposes the compatible session tools and editable project tools, and creates a recording through an SDK client", async () => {
     const artifactRoot = await mkdtemp(join(tmpdir(), "recordly-codex-stdio-"));
     await execFileAsync("npm", ["run", "build"]);
     await access("dist/mcp/server.js");
@@ -345,10 +345,15 @@ describe("recordly Codex MCP handlers", () => {
       await client.connect(transport);
       const listed = await client.listTools();
       expect(listed.tools.map((tool) => tool.name).sort()).toEqual([
+        "create_recording_project",
         "create_recording_session",
         "discard_recording_session",
+        "inspect_recording_project",
         "inspect_recording_session",
         "record_browser_event",
+        "render_recording_project_final",
+        "render_recording_project_preview",
+        "revise_recording_project",
         "seal_recording_capture",
       ]);
       const created = toolOutputSchema.parse(

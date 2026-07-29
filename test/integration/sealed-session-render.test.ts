@@ -1,6 +1,7 @@
 import { execFile } from "node:child_process";
 import { createHash } from "node:crypto";
 import {
+  chmod,
   copyFile,
   lstat,
   mkdir,
@@ -15,6 +16,7 @@ import { join } from "node:path";
 import { promisify } from "node:util";
 
 import { afterEach, describe, expect, it } from "vitest";
+import { createSessionStoreService } from "../../mcp/session-store-service.js";
 import { resolveMediaExecutable } from "../../src/encoder/ffmpeg.js";
 import { renderSealedSession, SealedSessionRenderError } from "../../src/render/sealed-session.js";
 
@@ -61,7 +63,9 @@ async function fixture(
     noVisibleResult?: boolean;
     lateAction?: boolean;
     observedType?: "click" | "scroll";
+    observedPointer?: boolean;
     plannedTelemetry?: boolean;
+    ownerToken?: string;
   } = {},
 ): Promise<{ artifactRoot: string; sessionId: string; sessionRoot: string }> {
   const artifactRoot = await mkdtemp(join(tmpdir(), "recordly-sealed-render-"));
@@ -80,6 +84,7 @@ async function fixture(
       index < 9 ? beforePath : afterPath,
       join(frameRoot, `frame-${String(index + 1).padStart(6, "0")}.jpg`),
     );
+    await chmod(join(frameRoot, `frame-${String(index + 1).padStart(6, "0")}.jpg`), 0o600);
   }
   const state = options.state ?? "sealed";
   await writeFile(
@@ -87,7 +92,7 @@ async function fixture(
     `${JSON.stringify({
       schemaVersion: 1,
       sessionId,
-      ownerToken: "test-owner",
+      ownerToken: options.ownerToken ?? "test-owner",
       state,
       createdAtUs: 100,
       ...(state === "sealed" ? { sealedAtUs: 200 } : {}),
@@ -149,19 +154,29 @@ async function fixture(
   });
   if (!options.noObservedAction) {
     const type = options.observedType ?? "click";
-    await writeFile(
-      join(sessionRoot, "observed-events.jsonl"),
-      `${JSON.stringify({
+    const observedEvents = [];
+    if (options.observedPointer) {
+      observedEvents.push({
         schemaVersion: 1,
         sessionId,
         seq: 1,
-        type,
-        receiptOffsetUs: options.lateAction ? 700_000 : 250_000,
-        data:
-          type === "click"
-            ? { x: 160, y: 90, button: 0 }
-            : { x: 0, y: 720, deltaX: 0, deltaY: 720 },
-      })}\n`,
+        type: "pointer",
+        receiptOffsetUs: 100_000,
+        data: { x: 120, y: 80, buttons: 0, cursor: "default" },
+      });
+    }
+    observedEvents.push({
+      schemaVersion: 1,
+      sessionId,
+      seq: options.observedPointer ? 2 : 1,
+      type,
+      receiptOffsetUs: options.lateAction ? 700_000 : 250_000,
+      data:
+        type === "click" ? { x: 160, y: 90, button: 0 } : { x: 0, y: 720, deltaX: 0, deltaY: 720 },
+    });
+    await writeFile(
+      join(sessionRoot, "observed-events.jsonl"),
+      `${observedEvents.map((event) => JSON.stringify(event)).join("\n")}\n`,
       { mode: 0o600 },
     );
   }
@@ -200,6 +215,17 @@ afterEach(async () => {
 });
 
 describe("sealed session renderer", () => {
+  it("accepts trusted pointer telemetry and exposes only presentation-safe cursor samples", async () => {
+    const source = await fixture({ observedPointer: true });
+
+    const rendered = await renderSealedSession(source);
+    const manifest = JSON.parse(await readFile(rendered.manifestPath, "utf8"));
+
+    expect(manifest.observedActions).toHaveLength(1);
+    expect(manifest.cursorTrack).toEqual([{ x: 120, y: 80, state: "default", cfrFrameIndex: 3 }]);
+    expect(JSON.stringify(manifest.cursorTrack)).not.toContain("receiptOffsetUs");
+  }, 60_000);
+
   it("renders receipt-timed evidence to a private, quality-approved CFR delivery", async () => {
     const source = await fixture();
 
@@ -412,4 +438,140 @@ describe("sealed session renderer", () => {
 
     await expect(renderSealedSession(source)).rejects.toThrow(/ancestor.*non-symlink directory/u);
   });
+
+  it("renders a real editable project through preview, revision, and final without recapturing", async () => {
+    const ownerToken = "11111111-1111-4111-8111-111111111111";
+    const source = await fixture({ ownerToken, observedPointer: true });
+    const helperRoot = join(process.cwd(), ".playwright-mcp", "recordly-codex", source.sessionId);
+    await mkdir(helperRoot, { recursive: true, mode: 0o700 });
+    await Promise.all([
+      writeFile(join(source.sessionRoot, "capture-config.json"), "{}\n", { mode: 0o600 }),
+      writeFile(join(helperRoot, "browser-start.mjs"), "export {};\n", { mode: 0o600 }),
+      writeFile(join(helperRoot, "browser-stop.mjs"), "export {};\n", { mode: 0o600 }),
+    ]);
+    await writeFile(join(source.artifactRoot, ".recordly-codex-owner-token"), `${ownerToken}\n`, {
+      mode: 0o600,
+    });
+    try {
+      const sealed = await renderSealedSession(source);
+      const service = createSessionStoreService({ artifactRoot: source.artifactRoot });
+      if (
+        service.createProject === undefined ||
+        service.reviseProject === undefined ||
+        service.renderProject === undefined
+      ) {
+        throw new Error("project rendering service is unavailable");
+      }
+      const captureBefore = await readFile(join(source.sessionRoot, "capture-events.jsonl"));
+      const created = await service.createProject({
+        sessionId: source.sessionId,
+        projectId: "service-flow",
+      });
+      expect(created.project.presentation.cursor.visible).toBe(true);
+      const manifestPath = join(source.sessionRoot, "artifacts", "recording-manifest.json");
+      const qualityPath = join(source.sessionRoot, "artifacts", "quality-report.json");
+      const legacyManifest = JSON.parse(await readFile(manifestPath, "utf8")) as Record<
+        string,
+        unknown
+      >;
+      // biome-ignore lint/complexity/useLiteralKeys: Record index-signature test fixture.
+      delete legacyManifest["cursorTrack"];
+      const legacyManifestText = JSON.stringify(legacyManifest);
+      const legacyQuality = JSON.parse(await readFile(qualityPath, "utf8")) as {
+        artifactHashes: { manifestSha256: string };
+      };
+      legacyQuality.artifactHashes.manifestSha256 = createHash("sha256")
+        .update(legacyManifestText)
+        .digest("hex");
+      await writeFile(manifestPath, legacyManifestText, { mode: 0o600 });
+      await writeFile(qualityPath, JSON.stringify(legacyQuality), { mode: 0o600 });
+      const sealedBefore = await Promise.all(
+        sealed.artifactPaths.map(async (path) => ({
+          path,
+          content: await readFile(path),
+          mtimeMs: (await lstat(path)).mtimeMs,
+        })),
+      );
+      const secondProject = await service.createProject({
+        sessionId: source.sessionId,
+        projectId: "service-flow-second",
+      });
+      expect(secondProject.project.captureSources[0]?.sessionId).toBe(
+        created.project.captureSources[0]?.sessionId,
+      );
+      expect(secondProject.project.presentation.cursor.visible).toBe(false);
+      for (const artifact of sealedBefore) {
+        expect(await readFile(artifact.path)).toEqual(artifact.content);
+        expect((await lstat(artifact.path)).mtimeMs).toBe(artifact.mtimeMs);
+      }
+      await chmod(join(source.sessionRoot, "capture-events.jsonl"), 0o644);
+      const preview = await service.renderProject({
+        projectId: secondProject.project.projectId,
+        revision: secondProject.project.revision,
+        kind: "preview",
+      });
+      expect(preview.render).toMatchObject({ kind: "preview", format: "mp4" });
+      await expect(
+        service.renderProject({
+          projectId: secondProject.project.projectId,
+          revision: 99,
+          kind: "preview",
+        }),
+      ).rejects.toThrow();
+      const revised = await service.reviseProject({
+        mode: "manual",
+        project: {
+          ...preview.project,
+          revision: 1,
+          output: { ...preview.project.output, format: "gif" },
+          presentation: {
+            ...preview.project.presentation,
+            cursor: { ...preview.project.presentation.cursor, preset: "large" },
+          },
+        },
+      });
+      const secondPreview = await service.renderProject({
+        projectId: revised.project.projectId,
+        revision: revised.project.revision,
+        kind: "preview",
+      });
+      const final = await service.renderProject({
+        projectId: revised.project.projectId,
+        revision: revised.project.revision,
+        kind: "final",
+      });
+      for (const result of [preview, secondPreview, final]) {
+        expect(result.render?.artifact).toMatch(
+          /^projects\/renders\/service-flow-second-r\d+-(preview|final)\.(mp4|gif)$/u,
+        );
+        expect(result.render?.sha256).toMatch(/^[a-f0-9]{64}$/u);
+        const path = join(source.artifactRoot, result.render?.artifact ?? "");
+        expect((await lstat(path)).mode & 0o777).toBe(0o600);
+        expect(await sha256(path)).toBe(result.render?.sha256);
+        await execFileAsync(await resolveMediaExecutable("ffmpeg"), [
+          "-hide_banner",
+          "-loglevel",
+          "error",
+          "-i",
+          path,
+          "-frames:v",
+          "1",
+          "-f",
+          "null",
+          "-",
+        ]);
+      }
+      expect(preview.render?.format).toBe("mp4");
+      expect(secondPreview.render?.format).toBe("gif");
+      expect(final.render?.format).toBe("gif");
+      expect(await readFile(join(source.sessionRoot, "capture-events.jsonl"))).toEqual(
+        captureBefore,
+      );
+      expect((await lstat(join(source.sessionRoot, "capture-events.jsonl"))).mode & 0o777).toBe(
+        0o600,
+      );
+    } finally {
+      await rm(helperRoot, { recursive: true, force: true });
+    }
+  }, 60_000);
 });

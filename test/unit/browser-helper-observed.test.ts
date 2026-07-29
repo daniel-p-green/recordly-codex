@@ -946,6 +946,7 @@ describe("Browser observed-event helper", () => {
     expect(startSource).not.toContain("page.evaluate");
     expect(startSource).toContain("/observed-event");
     expect(`${startSource}\n${stopSource}`).not.toContain("new URL");
+    expect(startSource).toContain("addEventListener('pointermove'");
     expect(startSource).toContain("addEventListener('click'");
     expect(startSource).toContain("addEventListener('wheel'");
     expect(startSource).toContain("event.isTrusted");
@@ -953,9 +954,14 @@ describe("Browser observed-event helper", () => {
     expect(startSource).toContain("wheelAttempts++ >= 119");
     expect(startSource).toContain("setTimeout(settleWheel, 16)");
     expect(startSource).toContain("clearTimeout(wheelTimer)");
+    expect(startSource).not.toContain("getComputedStyle");
+    expect(startSource).not.toContain("event.target");
     expect(stopSource).not.toContain("Runtime.removeBinding");
     expect(stopSource).toContain("observedPending");
     expect(stopSource).toContain("Promise.allSettled(capture.state.observedPending)");
+    expect(stopSource.indexOf("await capture.settleObserved()")).toBeLessThan(
+      stopSource.indexOf("capture.state.active = false"),
+    );
     expect(`${startSource}\n${stopSource}`).not.toMatch(
       /textContent|outerHTML|innerHTML|selector|localStorage|document\\.cookie|[0-9a-f]{64}/iu,
     );
@@ -1141,7 +1147,7 @@ describe("Browser observed-event helper", () => {
         call.params.expression.includes("settleWheel"),
     )?.params?.expression;
     if (typeof isolatedExpression !== "string") throw new Error("missing isolated observer");
-    const listeners = new Map<string, (event: { isTrusted: boolean }) => void>();
+    const listeners = new Map<string, (event: Record<string, unknown>) => void>();
     let mainWorldConsoleCalls = 0;
     const fakeWindow = {
       scrollX: 0,
@@ -1151,7 +1157,7 @@ describe("Browser observed-event helper", () => {
           mainWorldConsoleCalls += 1;
         },
       },
-      addEventListener: (name: string, listener: (event: { isTrusted: boolean }) => void) =>
+      addEventListener: (name: string, listener: (event: Record<string, unknown>) => void) =>
         listeners.set(name, listener),
       removeEventListener: (name: string) => listeners.delete(name),
     };
@@ -1161,6 +1167,7 @@ describe("Browser observed-event helper", () => {
     const consoleMarkers: string[] = [];
     const isolatedGlobal: Record<string, unknown> = {};
     let requestedCryptoBytes = 0;
+    let pointerClockMs = 0;
     const evaluateIsolated = Function(
       "window",
       "globalThis",
@@ -1170,6 +1177,7 @@ describe("Browser observed-event helper", () => {
       "cancelAnimationFrame",
       "setTimeout",
       "clearTimeout",
+      "performance",
       `return ${isolatedExpression}`,
     ) as (...args: unknown[]) => unknown;
     const evaluatedNonce = evaluateIsolated(
@@ -1200,10 +1208,14 @@ describe("Browser observed-event helper", () => {
         return id;
       },
       (id: number) => callbacks.delete(id),
+      { now: () => pointerClockMs },
     );
     expect(requestedCryptoBytes).toBe(32);
     expect(evaluatedNonce).toBeUndefined();
-    expect(Object.keys(isolatedGlobal)).toEqual(["__recordlyCleanup_session-001"]);
+    expect(Object.keys(isolatedGlobal).sort()).toEqual([
+      "__recordlyCleanup_session-001",
+      "__recordlyFlushPointer_session-001",
+    ]);
     const flushOne = () => {
       const next = callbacks.entries().next().value as [number, () => void] | undefined;
       if (next !== undefined) {
@@ -1211,12 +1223,48 @@ describe("Browser observed-event helper", () => {
         next[1]();
       }
     };
+    listeners.get("pointermove")?.({ isTrusted: false, clientX: 1, clientY: 2, buttons: 0 });
+    expect(deliveries).toEqual([
+      {
+        kind: "ready",
+        nonce: "000102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f",
+      },
+    ]);
+    listeners.get("pointermove")?.({ isTrusted: true, clientX: 10, clientY: 20, buttons: 0 });
+    listeners.get("pointermove")?.({ isTrusted: true, clientX: 30, clientY: 40, buttons: 1 });
+    flushOne();
+    expect(deliveries).toEqual([
+      {
+        kind: "ready",
+        nonce: "000102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f",
+      },
+      {
+        kind: "event",
+        nonce: "000102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f",
+        event: { type: "pointer", data: { x: 30, y: 40, buttons: 1, cursor: "pressed" } },
+      },
+    ]);
+    pointerClockMs = 10;
+    listeners.get("pointermove")?.({ isTrusted: true, clientX: 50, clientY: 60, buttons: 0 });
+    flushOne();
+    pointerClockMs = 33;
+    flushOne();
     listeners.get("wheel")?.({ isTrusted: true });
     for (let index = 0; index < 9; index += 1) flushOne();
     expect(deliveries).toEqual([
       {
         kind: "ready",
         nonce: "000102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f",
+      },
+      {
+        kind: "event",
+        nonce: "000102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f",
+        event: { type: "pointer", data: { x: 30, y: 40, buttons: 1, cursor: "pressed" } },
+      },
+      {
+        kind: "event",
+        nonce: "000102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f",
+        event: { type: "pointer", data: { x: 50, y: 60, buttons: 0, cursor: "default" } },
       },
     ]);
     fakeWindow.scrollY = 1440;
@@ -1230,16 +1278,33 @@ describe("Browser observed-event helper", () => {
       {
         kind: "event",
         nonce: "000102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f",
+        event: { type: "pointer", data: { x: 30, y: 40, buttons: 1, cursor: "pressed" } },
+      },
+      {
+        kind: "event",
+        nonce: "000102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f",
+        event: { type: "pointer", data: { x: 50, y: 60, buttons: 0, cursor: "default" } },
+      },
+      {
+        kind: "event",
+        nonce: "000102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f",
         event: { type: "scroll", data: { x: 0, y: 1440, deltaX: 0, deltaY: 1440 } },
       },
     ]);
-    expect(consoleMarkers).toEqual([MARKER_A, MARKER_A]);
+    expect(consoleMarkers).toEqual([MARKER_A, MARKER_A, MARKER_A, MARKER_A]);
     expect(mainWorldConsoleCalls).toBe(0);
     listeners.get("wheel")?.({ isTrusted: true });
     expect(callbacks.size).toBeGreaterThan(0);
+    pointerClockMs = 34;
+    listeners.get("pointermove")?.({ isTrusted: true, clientX: 70, clientY: 80, buttons: 0 });
     const cleanup = isolatedGlobal["__recordlyCleanup_session-001"];
     if (typeof cleanup !== "function") throw new Error("missing isolated cleanup");
     cleanup();
+    expect(deliveries.at(-1)).toEqual({
+      kind: "event",
+      nonce: "000102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f",
+      event: { type: "pointer", data: { x: 70, y: 80, buttons: 0, cursor: "default" } },
+    });
     expect(callbacks).toHaveLength(0);
     expect(listeners).toHaveLength(0);
     session.emit("Runtime.bindingCalled", {

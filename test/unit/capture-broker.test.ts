@@ -281,6 +281,103 @@ describe("loopback capture broker", () => {
     }
   });
 
+  it("coalesces privacy-bounded pointer observations and drains the final sample on stop", async () => {
+    const samples = [1_000, 1_010, 1_020, 1_030];
+    const { root, phases, instance, post } = await broker(() => samples.shift() ?? 1_040);
+    try {
+      const claim = await post("/claim", identity);
+      const token = ((await claim.json()) as { token: string }).token;
+      await expect(post("/frame", framePayload(1), token)).resolves.toMatchObject({ status: 200 });
+      for (const event of [
+        { type: "pointer", data: { x: 10, y: 20, buttons: 0, cursor: "default" } },
+        { type: "pointer", data: { x: 40, y: 60, buttons: 1, cursor: "pressed" } },
+      ]) {
+        await expect(
+          post("/observed-event", { ...observedIdentity, event }, token),
+        ).resolves.toMatchObject({
+          status: 200,
+        });
+      }
+      await expect(
+        post(
+          "/stop",
+          {
+            ...identity,
+            receivedFrames: 1,
+            acceptedFrames: 1,
+            ackedFrames: 1,
+            rejectedFrames: 0,
+            degradationRequested: false,
+          },
+          token,
+        ),
+      ).resolves.toMatchObject({ status: 200, statusText: "OK" });
+      const events = (await readFile(join(root, "observed-events.jsonl"), "utf8"))
+        .trim()
+        .split("\n")
+        .map((line) => JSON.parse(line) as Record<string, unknown>);
+      expect(events).toEqual([
+        {
+          schemaVersion: 1,
+          sessionId: "session-001",
+          seq: 1,
+          type: "pointer",
+          receiptOffsetUs: 20,
+          data: { x: 40, y: 60, buttons: 1, cursor: "pressed" },
+        },
+      ]);
+      expect(JSON.stringify(events)).not.toMatch(/selector|text|url|cookie|storage|style/i);
+
+      expect(phases.at(-1)).toBe("stopped");
+    } finally {
+      await instance.close();
+    }
+  });
+
+  it("fails closed for malformed pointer state and pointer floods", async () => {
+    let sample = 5_000;
+    const { phases, instance, post } = await broker(() => sample++);
+    try {
+      const claim = await post("/claim", identity);
+      const token = ((await claim.json()) as { token: string }).token;
+      await expect(post("/frame", framePayload(1), token)).resolves.toMatchObject({ status: 200 });
+      const malformed = await post(
+        "/observed-event",
+        {
+          ...observedIdentity,
+          event: {
+            type: "pointer",
+            data: { x: 1, y: 2, buttons: 0, cursor: "url(https://attacker.example/cursor)" },
+          },
+        },
+        token,
+      );
+      expect(malformed.status).toBe(400);
+      expect(phases.at(-1)).toBe("failed");
+    } finally {
+      await instance.close();
+    }
+
+    let floodSample = 8_000;
+    const flooded = await broker(() => floodSample++);
+    try {
+      const claim = await flooded.post("/claim", identity);
+      const token = ((await claim.json()) as { token: string }).token;
+      await flooded.post("/frame", framePayload(1), token);
+      const pointer = {
+        ...observedIdentity,
+        event: { type: "pointer", data: { x: 1, y: 2, buttons: 0, cursor: "default" } },
+      };
+      for (let index = 0; index < 120; index += 1) {
+        expect((await flooded.post("/observed-event", pointer, token)).status).toBe(200);
+      }
+      expect((await flooded.post("/observed-event", pointer, token)).status).toBe(429);
+      expect(flooded.phases.at(-1)).toBe("failed");
+    } finally {
+      await flooded.instance.close();
+    }
+  });
+
   it("fails closed when observed-event rate exceeds the bounded broker window", async () => {
     let sample = 5_000;
     const { phases, instance, post } = await broker(() => sample++);

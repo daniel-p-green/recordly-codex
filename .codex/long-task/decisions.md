@@ -61,4 +61,18 @@
 - Context: Page-provided timestamps cannot prove when a frame reached local persistent storage.
 - Decision: The loopback broker assigns the first accepted frame offset zero and strictly increases later receipt offsets. Sealed delivery requires complete broker timing and rejects legacy timing for approval.
 - Reason: This preserves an auditable boundary between Browser capture, deterministic CFR rendering, and the model.
-- Consequence: Cursor, click, and zoom polish remain out of scope until semantic telemetry is synchronized to that same evidence clock.
+- Consequence: Cursor, click, and zoom polish remained out of scope until semantic telemetry was synchronized to that evidence clock. The v0.3.0 project renderer now consumes source-keyed observed evidence without changing the broker's authority.
+
+## D-009 — Editable projects are revision-gated full documents
+
+- Context: Rich composition needs a durable contract without introducing a speculative graphical editor or allowing stale renders to overwrite newer editorial work.
+- Decision: Store one canonical full-document project with monotonic revisions and digest checks. Require an exact-current-revision preview before final rendering, and serialize create, revise, and render publication by project ID.
+- Reason: Full-document validation keeps timing, source provenance, and output behavior deterministic while revision and preview gates make stale work explicit.
+- Consequence: Project edits support the proven renderer features through MCP, but collaborative merges and a graphical editor remain outside v0.3.0.
+
+## D-010 — Verified private snapshots are renderer inputs
+
+- Context: Hashing a mutable pathname and reopening it later allows replacement between verification and consumption.
+- Decision: Copy capture frames, PiP, and audio from one opened and bounded regular file into exclusive private snapshots while hashing the exact bytes copied. Make composition and FFmpeg consume only those snapshots, publish through an exclusive contained staging file, and clean staging on success or failure.
+- Reason: This preserves the digest/type/size contract through actual media consumption.
+- Consequence: Render operations require temporary private disk space proportional to selected bounded inputs; source pathnames are never treated as verified media after hashing.

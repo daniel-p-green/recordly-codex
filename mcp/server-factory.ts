@@ -1,14 +1,18 @@
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { createRecordingToolHandlers } from "./handlers.js";
 import {
+  createRecordingProjectInputSchema,
   createRecordingSessionInputSchema,
   discardRecordingSessionInputSchema,
+  inspectRecordingProjectInputSchema,
   inspectRecordingSessionInputSchema,
   recordBrowserEventInputSchema,
+  renderRecordingProjectInputSchema,
+  reviseRecordingProjectInputSchema,
   sealRecordingCaptureInputSchema,
   toolOutputSchema,
 } from "./schemas.js";
-import type { RecordingSessionService } from "./types.js";
+import type { RecordingMcpService } from "./types.js";
 
 const readOnlyAnnotations = {
   readOnlyHint: true,
@@ -24,8 +28,8 @@ const mutationAnnotations = {
   openWorldHint: false,
 } as const;
 
-export function createRecordingMcpServer(service: RecordingSessionService): McpServer {
-  const server = new McpServer({ name: "recordly-codex-mcp-server", version: "0.2.0" });
+export function createRecordingMcpServer(service: RecordingMcpService): McpServer {
+  const server = new McpServer({ name: "recordly-codex-mcp-server", version: "0.3.0" });
   const handlers = createRecordingToolHandlers(service);
   server.registerTool(
     "create_recording_session",
@@ -82,5 +86,71 @@ export function createRecordingMcpServer(service: RecordingSessionService): McpS
     },
     handlers.discardRecordingSession,
   );
+  if (
+    service.createProject !== undefined &&
+    service.inspectProject !== undefined &&
+    service.reviseProject !== undefined
+  ) {
+    server.registerTool(
+      "create_recording_project",
+      {
+        title: "Create editable recording project",
+        description: "Create a versioned local project from one quality-approved sealed capture.",
+        inputSchema: createRecordingProjectInputSchema,
+        outputSchema: toolOutputSchema,
+        annotations: mutationAnnotations,
+      },
+      handlers.createRecordingProject,
+    );
+    server.registerTool(
+      "inspect_recording_project",
+      {
+        title: "Inspect editable recording project",
+        description: "Load the canonical editable project and its revision and preview status.",
+        inputSchema: inspectRecordingProjectInputSchema,
+        outputSchema: toolOutputSchema,
+        annotations: readOnlyAnnotations,
+      },
+      handlers.inspectRecordingProject,
+    );
+    server.registerTool(
+      "revise_recording_project",
+      {
+        title: "Revise editable recording project",
+        description:
+          "Replace one project with a validated monotonic full-document editorial revision.",
+        inputSchema: reviseRecordingProjectInputSchema,
+        outputSchema: toolOutputSchema,
+        annotations: mutationAnnotations,
+      },
+      handlers.reviseRecordingProject,
+    );
+  }
+  if (service.renderProject !== undefined && service.renderProjectEnabled === true) {
+    server.registerTool(
+      "render_recording_project_preview",
+      {
+        title: "Render recording project preview",
+        description:
+          "Render a deterministic preview only for the requested current project revision.",
+        inputSchema: renderRecordingProjectInputSchema,
+        outputSchema: toolOutputSchema,
+        annotations: mutationAnnotations,
+      },
+      handlers.renderRecordingProjectPreview,
+    );
+    server.registerTool(
+      "render_recording_project_final",
+      {
+        title: "Render recording project final",
+        description:
+          "Render a deterministic final only after a matching current preview is available.",
+        inputSchema: renderRecordingProjectInputSchema,
+        outputSchema: toolOutputSchema,
+        annotations: mutationAnnotations,
+      },
+      handlers.renderRecordingProjectFinal,
+    );
+  }
   return server;
 }

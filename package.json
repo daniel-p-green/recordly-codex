@@ -1,7 +1,7 @@
 {
   "name": "recordly-codex",
-  "version": "0.2.0",
-  "description": "A Codex plugin for browser-directed site recordings with brokered evidence and fail-closed QA.",
+  "version": "0.3.0",
+  "description": "A Codex plugin for evidence-backed browser capture and deterministic editable recording projects.",
   "private": true,
   "type": "module",
   "packageManager": "npm@11.17.0",

@@ -1,3 +1,5 @@
+import type { RecordingProject } from "../src/project/index.js";
+
 export type RecordingSessionStatus = "open" | "sealed" | "discarded";
 
 /** Events Codex may describe. Capture evidence is generated locally, never supplied by the model. */
@@ -45,3 +47,38 @@ export interface RecordingSessionService {
   seal(input: { sessionId: string }): Promise<RecordingSessionView>;
   discard(input: { sessionId: string; reason?: string }): Promise<RecordingSessionView>;
 }
+
+export type RecordingProjectView = {
+  project: RecordingProject;
+  projectSha256: string;
+  render?: {
+    kind: "preview" | "final";
+    revision: number;
+    format: "mp4" | "gif";
+    /** A safe relative artifact name, never a filesystem path. */
+    artifact: string;
+    sha256: string;
+  };
+};
+
+export interface RecordingProjectService {
+  createProject(input: {
+    sessionId: string;
+    projectId?: string;
+    automatedRevisionLimit?: number;
+  }): Promise<RecordingProjectView>;
+  inspectProject(input: { projectId: string }): Promise<RecordingProjectView>;
+  reviseProject(input: {
+    project: unknown;
+    mode: "manual" | "automated";
+  }): Promise<RecordingProjectView>;
+  renderProject(input: {
+    projectId: string;
+    revision: number;
+    kind: "preview" | "final";
+  }): Promise<RecordingProjectView>;
+  /** Set only after the renderer's current safety checklist clears. */
+  renderProjectEnabled?: boolean;
+}
+
+export type RecordingMcpService = RecordingSessionService & Partial<RecordingProjectService>;

@@ -1,7 +1,7 @@
 {
   "name": "recordly-codex",
-  "version": "0.2.0",
-  "description": "Codex Desktop Browser guidance and local MCP tools for approved evidence-backed website recordings.",
+  "version": "0.3.0",
+  "description": "Codex Desktop Browser capture and editable local projects for approved evidence-backed website recordings.",
   "author": {
     "name": "Daniel P. Green",
     "url": "https://github.com/daniel-p-green"
@@ -14,23 +14,25 @@
   "mcpServers": "./.mcp.json",
   "interface": {
     "displayName": "Recordly Codex",
-    "shortDescription": "Create approved browser recordings with observed-action quality gates.",
-    "longDescription": "Guides Codex Desktop Browser through approved URL-and-objective recording sessions, with local broker-timed trusted-click and trusted-wheel-derived scroll evidence, temporal visible-result checks, decoded clipping QA, and deterministic delivery.",
+    "shortDescription": "Capture, edit, and render approved browser recordings.",
+    "longDescription": "Guides Codex Desktop Browser through approved evidence-backed capture, then creates versioned editable projects with deterministic MP4/GIF rendering, source-timed composition, and fail-closed revision and media-integrity gates.",
     "developerName": "Daniel P. Green",
     "category": "Productivity",
     "capabilities": [
       "Browser-directed capture helpers",
       "Automatic broker-timed trusted-click and trusted-wheel-derived scroll evidence",
       "Temporal visible-result and clipping QA",
-      "Local evidence-backed sessions",
-      "Deterministic 1080p delivery",
+      "Versioned editable recording projects",
+      "Deterministic MP4 and GIF composition",
+      "Trims, speed ramps, transitions, cursor, click, zoom, overlays, PiP, and audio",
       "Fail-closed approval workflows"
     ],
     "defaultPrompt": [
       "Record this approved URL and objective with Recordly Codex.",
       "Create a local browser recording session for this approved workflow.",
       "Inspect this recording session and report its safe capture state.",
-      "Seal this completed capture and return its quality-approved delivery artifacts."
+      "Seal this completed capture and return its quality-approved delivery artifacts.",
+      "Create an editable project from this approved capture and render a preview."
     ],
     "brandColor": "#0F766E"
   }

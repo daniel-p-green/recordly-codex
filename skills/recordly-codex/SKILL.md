@@ -23,11 +23,23 @@ Use this skill only for an approved public or explicitly pre-authenticated websi
 5. Call `inspect_recording_session`. If capture is complete, call `seal_recording_capture`. Sealing requires a successful browser summary, complete acknowledgements, and broker receipt timing; it then renders and quality-checks the recording.
 6. Treat the returned MP4, delivery manifest, and quality report as a delivery only when the report says approved. Otherwise report the failed gate and use `discard_recording_session` for an abandoned session.
 
+## Editable project flow
+
+1. After a capture is sealed and quality-approved, call `create_recording_project` with its session ID.
+2. Call `inspect_recording_project` before editing. Treat the canonical project as one complete versioned document.
+3. Submit a validated full-document revision through `revise_recording_project`. Manual and bounded automated revision modes are distinct; never bypass the automatic revision limit.
+4. Call `render_recording_project_preview` with the exact current revision and inspect the resulting artifact.
+5. Call `render_recording_project_final` only after a matching preview exists for that same revision. If the project changed, render a new preview first.
+
+The project may declare trims, constant or ramped speed, cuts/crossfades, observed cursor/click effects, manual or automatic zooms, annotations, captions, PiP, WAV audio, and explicit local render hooks. MP4 and GIF are supported; GIF cannot contain audio. A rendered artifact is a candidate until the required preview/final state and human editorial review are satisfied.
+
 ## Quality and honesty
 
 - Receipt timing is local broker evidence: the first accepted frame is offset zero, later frame offsets are strictly increasing, and automatically observed trusted-click and trusted-wheel-derived scroll actions share that receipt clock. Do not invent or submit timing or observed actions through MCP.
 - Observed evidence is intentionally narrow: trusted-click coordinates/button, plus the first nonzero actual window scroll position/delta found within a bounded window of at most 120 animation-frame attempts spaced by 16 ms after a trusted wheel, roughly two seconds. No movement in that window produces no scroll evidence. Never expand observation to selectors, element text, DOM, cookies, storage, or the target URL path.
-- The baseline renderer is a clean 1080p, 30 fps, limited-range, silent H.264 deliverable. It verifies media properties and decoded source edges, border, matte, and aspect. Do not claim cursor paths, click ripples, or zoom effects; v0.2.0 does not render them.
+- The sealed-capture baseline is a clean 1080p, 30 fps, limited-range, silent H.264 deliverable with media and decoded composition checks. The intended v0.3.0 project renderer can add source-keyed cursor motion, click ripple/bounce effects, zooms, overlays, PiP, audio, ramps, and transitions from validated project inputs. Never invent missing observed evidence.
+- Treat “near-output parity” as a bounded composition claim, not Recordly source/API compatibility, pixel identity, editor parity, or feature completeness. Recordly code and assets are outside this Apache-2.0 clean-room implementation.
 - Action alignment is temporal and visible, not causal or semantic: approval requires an automatically observed action, a decoded visual change in the allowed result window, and a sufficient final hold. It does not prove that the action caused the change or that the result satisfies the objective.
 - A successful tool call or click is not a successful shot. Check the page's visible result, capture summary, and quality report. Treat missing/malformed observed evidence, no decoded change, insufficient final hold, clipping, frozen frames, incomplete receipt timing, or media mismatch as a failed approval.
 - Report an unsupported Browser host capability, blocked approval, failed capture, or candidate-quality output plainly. Do not promise autonomous completion for arbitrary sites.
+- The published v0.2.0 release remains the latest marketplace and authorized-site proof. Until v0.3.0 is released, clean-installed, and accepted on an approved site, describe its project/render capabilities as locally verified candidate behavior.
