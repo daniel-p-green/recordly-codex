@@ -10,10 +10,16 @@ coverage/
 dist/
 *.tsbuildinfo
 
+# The standalone MCP runtime is deliberately committed for marketplace installs.
+plugin-runtime/*
+!plugin-runtime/
+!plugin-runtime/recordly-codex-mcp.mjs
+
 # Local recording artifacts. Keep source fixtures intentionally added under test/.
 recordings/
 artifacts/
 tmp/
+.playwright-mcp/
 
 # Local environment and editor state
 .env

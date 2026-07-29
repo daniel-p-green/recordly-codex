@@ -1,7 +1,7 @@
 {
   "name": "recordly-codex",
   "version": "0.1.0",
-  "description": "Codex guidance for planning and producing deterministic browser site recordings.",
+  "description": "Codex Desktop Browser guidance and local MCP tools for approved evidence-backed website recordings.",
   "author": {
     "name": "Daniel P. Green",
     "url": "https://github.com/daniel-p-green"
@@ -11,17 +11,24 @@
   "license": "Apache-2.0",
   "keywords": ["codex", "browser", "recording", "site-demo", "video"],
   "skills": "./skills/",
+  "mcpServers": "./.mcp.json",
   "interface": {
     "displayName": "Recordly Codex",
-    "shortDescription": "Plan deterministic browser site recordings.",
-    "longDescription": "Guides Codex through approved browser-based recording plans, deterministic manifests, and quality gates.",
+    "shortDescription": "Create approved browser recordings with local quality gates.",
+    "longDescription": "Guides Codex Desktop Browser through approved URL-and-objective recording sessions, with local brokered capture evidence and deterministic delivery checks.",
     "developerName": "Daniel P. Green",
     "category": "Productivity",
-    "capabilities": ["Browser-guided planning", "Recording manifests", "Quality-gated workflows"],
+    "capabilities": [
+      "Browser-directed capture helpers",
+      "Local evidence-backed sessions",
+      "Deterministic 1080p delivery",
+      "Quality-gated workflows"
+    ],
     "defaultPrompt": [
-      "Use Recordly Codex to plan a recording for this approved URL.",
-      "Create a deterministic browser demo plan for this site workflow.",
-      "Review this recording manifest for safe, repeatable capture."
+      "Record this approved URL and objective with Recordly Codex.",
+      "Create a local browser recording session for this approved workflow.",
+      "Inspect this recording session and report its safe capture state.",
+      "Seal this completed capture and return its quality-approved delivery artifacts."
     ],
     "brandColor": "#0F766E"
   }

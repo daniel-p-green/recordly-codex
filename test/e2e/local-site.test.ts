@@ -20,6 +20,7 @@ describe("local public-site recording fixture", () => {
       expect(recording.video).toEqual({
         width: 1920,
         height: 1080,
+        pixelFormat: "yuv420p",
         fps: 30,
         frameCount: 30,
         durationSeconds: 1,

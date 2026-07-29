@@ -1,55 +1,67 @@
 # Recordly Codex
 
-Recordly Codex is an open-source Codex plugin and local TypeScript runtime for creating evidence-backed website recordings from an approved URL and workflow. It is being built as a browser-directed pipeline: Codex plans and rehearses the story, deterministic code captures and renders it, and automated checks decide whether the resulting media is usable.
+Recordly Codex is an Apache-2.0 Codex plugin and local TypeScript runtime for evidence-backed website recordings. Give Codex an approved URL and objective; local code owns frame persistence, timing, rendering, encoding, and artifact checks. It does not use another visible recording app.
 
-The first supported environment is Codex Desktop Browser. A recording may run unattended only when the target is public or already authorized and the flow does not require a human-only approval, credential, permission, CAPTCHA, payment, sensitive upload, or irreversible action.
+The supported interaction surface is Codex Desktop Browser. It is not a Codex CLI or IDE browser integration.
 
-## Status
+## Current capability
 
-The repository is public at [github.com/daniel-p-green/recordly-codex](https://github.com/daniel-p-green/recordly-codex), protected from direct changes, and its initial CI run is green. The plugin manifest validates. A clean `npm ci` completes with zero reported audit vulnerabilities.
+| Capability | Current behavior | Boundary |
+| --- | --- | --- |
+| Session control | Five local MCP tools create, inspect, append semantic events, seal, and discard a session | URL and objective are required; a session is not a completed recording. |
+| Browser capture | Generated start/stop helper entrypoints call a per-session loopback broker | The Codex Browser host must expose `browser_run_code_unsafe`; the MCP server cannot invoke Browser actions itself. |
+| Evidence | Broker-owned receipt offsets, frame hashes, canonical metadata, and semantic telemetry stay in a private artifact root | Raw frames never enter model context or Git. |
+| Delivery | Sealing a complete capture runs the deterministic renderer and returns an MP4, sanitized delivery manifest, and quality report | Delivery is approved only with complete broker receipt timing and non-frozen evidence. |
+| Visual treatment | The renderer produces a clean 1080p, 30 fps, silent baseline with source-frame framing | It does not fabricate cursor motion, click effects, or zooms without synchronized telemetry. |
 
-The completed local capture-render tranche includes:
+The checked local evidence covers built stdio MCP calls, a loopback-only browser capture/render fixture, receipt-timed delivery, and redacted failure paths. It is not a claim that every public site, Browser host version, or authentication flow will work unattended. A Codex Desktop marketplace install and a real approved-site end-to-end capture still require release-time live verification.
 
-- A bounded CDP screencast capture adapter with durable-frame acknowledgement and capture-health telemetry.
-- A compiler that verifies immutable frame hashes, emits a canonical sanitized manifest, builds a deterministic constant-frame-rate timeline, and classifies QA preconditions.
-- A deterministic renderer and encoder fixture that produces a valid 1920x1080, 30 fps, 30-frame silent H.264 MP4.
-- A system-Chrome, loopback-only E2E fixture that records opening, action, and result states while blocking external requests, then verifies the manifest, telemetry, decoded media, and a sampled output frame.
+## Install from a release
 
-The suite has 34 passing tests. Before the final CI coverage-threshold configuration, its coverage report was 93.92% lines and 85.74% branches. The fixture is deliberately a local proof harness, not a user-facing browser-control integration.
+Use a released tag when one is available; `main` is appropriate only for development.
 
-This is still not a drop-in autonomous recorder. The runtime does not yet include a Codex Desktop Browser-to-local-engine MCP/control bridge, and it has not yet recorded a real approved public-site workflow. Those two proofs remain required before claiming that Codex can autonomously create a real site recording.
-
-## Product contract
-
-```text
-approved URL + objective
-  -> shot plan + rehearsal evidence
-  -> versioned recording manifest
-  -> deterministic capture and render
-  -> quality gates
-  -> media file + manifest
+```bash
+codex plugin marketplace add daniel-p-green/recordly-codex --ref <released-tag>
+codex plugin add recordly-codex@recordly-codex
 ```
 
-The canonical manifest and its frame hashes are the durable handoff between planning, capture, rendering, and QA. They must never contain secrets, cookies, query values, or raw frame streams.
+`recordly-codex@recordly-codex` is the selector declared by this repository's one-plugin marketplace manifest. The source is the repository root, so the plugin's `.codex-plugin/` and `.mcp.json` layout remain intact.
 
-## Development
+Marketplace installs start the committed `plugin-runtime/recordly-codex-mcp.mjs` bundle. It embeds the MCP SDK and local runtime dependencies, so an installed plugin does not depend on `node_modules`, a build output directory, or a separate recording application. Its bundled npm dependency notices are shipped in [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md). Node.js and, when sealing a capture, `ffmpeg` and `ffprobe` are still required on the host.
 
-Requirements: Node.js 22.17+ and npm 11+.
+For a clean developer checkout:
 
 ```bash
 npm ci
-npm run check
 npm run plugin:validate
+npm run check
 ```
 
-Use red-green-refactor for executable behavior. Add a failing test before implementing a new capture, rendering, browser-control, or QA rule. The local E2E fixture needs a supported system Chrome plus FFmpeg and FFprobe; it does not use the Codex Browser surface.
+The install command above has been validated as the supported marketplace shape, but a post-release Codex Desktop install remains a release gate. Do not treat a local build, a marketplace listing, or an MCP process as proof that the Desktop Browser host can run the capture helpers.
 
-## CI and releases
+Requirements: Node.js 22.17+, npm 11+, `ffmpeg`, and `ffprobe`. The loopback E2E harness also needs a supported system Chrome; that Chrome harness is test evidence, not the Codex Browser runtime.
 
-Pull requests and pushes to `main` are configured to run formatting, linting, strict type checks, tests, plugin validation, fixture validation, and coverage collection. Pushing a `v*` Git tag is configured to rerun validation and attach a source archive to a GitHub Release; it does not publish an npm package or imply production readiness.
+## Use in Codex Desktop
 
-## License and upstream relationship
+1. Confirm that the site and the proposed actions are public or explicitly authorized. State the objective and any allowed origins.
+2. Call `create_recording_session` with `url`, `objective`, and, when needed, `allowedOrigins` or `allowPrivateOrigin`. It creates a private session and returns two Browser helper entrypoints plus capture configuration.
+3. Inspect and rehearse in Codex Desktop Browser at the fixed viewport. To capture, the host must offer `browser_run_code_unsafe`; run the returned start helper once in the approved page, drive only the approved workflow, then run its matching stop helper once.
+4. Use `record_browser_event` for semantic `pointer`, `click`, `scroll`, `navigation`, `viewport`, or `marker` events. The service assigns sequence numbers and monotonic timestamps. Frame and health events are broker-owned and cannot be supplied through MCP.
+5. Use `inspect_recording_session` to read safe status and paths. Call `seal_recording_capture` only after a successful stop summary. It renders and quality-checks the capture, then returns exactly three contained delivery artifacts: `recording.mp4`, `recording-manifest.json`, and `quality-report.json`.
+6. Use `discard_recording_session` for failed, abandoned, or unapproved work. It removes the owned temporary evidence and helpers.
 
-This repository is Apache-2.0 for its original code. It is an independent project inspired by the recording workflow problem, not an official Recordly integration. Recordly is licensed under AGPL-3.0; do not copy, adapt, or distribute Recordly implementation here without a separate license-compliance decision.
+The loopback broker grants one random capability token on the helper's one-time claim. It accepts only loopback JSON requests for that session and origin. Each accepted frame receives a local monotonic `receiptOffsetUs`; the page cannot choose it. The first offset is zero and later offsets are strictly increasing. Legacy evidence can be inspected, but cannot become a quality-approved delivery.
 
-See [CONTRIBUTING.md](CONTRIBUTING.md), [SECURITY.md](SECURITY.md), and [CODE_OF_CONDUCT.md](CODE_OF_CONDUCT.md).
+Stop and ask the user rather than proceeding through credentials, MFA/OTP, CAPTCHA or bot controls, consent or device permissions, payment, uploads of sensitive material, downloads, publishing, deletion, access changes, legal acceptance, or any irreversible action. Never bypass a browser or site safety control.
+
+## Privacy and artifacts
+
+Session directories and owner tokens use restrictive local permissions. Browser-visible helpers are separate from the private artifact root. The delivery manifest preserves the target origin and evidence hashes while omitting target path, query, fragment, credentials, and raw-frame paths. No cookies, headers, raw DOM, page text, or raw frame stream should be placed in prompts, Git, CI logs, or issue reports.
+
+See [architecture](docs/architecture.md) for the boundary design and delivery rules, [threat model](docs/threat-model.md) for the action/approval policy, and [licensing](docs/licensing.md) for the Recordly clean-room boundary.
+
+## Development and release
+
+Changes use red-green-refactor. Run `npm ci`, `npm run check`, and `npm run plugin:validate` before release; `npm ci` rebuilds source outputs and verifies that the committed MCP bundle and its dependency notices are reproducible from esbuild's actual input graph. The repository contains a capability matrix because supported behavior has material safety consequences; a separate changelog is not added until a tagged public release establishes a versioned change history.
+
+This project is independent from [Recordly](https://github.com/webadderallorg/Recordly). Recordly is AGPL-3.0; do not copy, adapt, link, or distribute its implementation or assets here without a separate legal and licensing decision.

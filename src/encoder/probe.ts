@@ -14,6 +14,7 @@ type FfprobeStream = {
   codec_type?: string;
   width?: number;
   height?: number;
+  pix_fmt?: string;
   avg_frame_rate?: string;
   nb_read_frames?: string;
 };
@@ -37,6 +38,7 @@ function parseRate(rate: string | undefined): number {
 export type RenderedVideoProbe = {
   width: number;
   height: number;
+  pixelFormat: string;
   fps: number;
   frameCount: number;
   durationSeconds: number;
@@ -50,7 +52,7 @@ export async function probeRenderedVideo(inputPath: string): Promise<RenderedVid
     "error",
     "-count_frames",
     "-show_entries",
-    "stream=codec_type,width,height,avg_frame_rate,nb_read_frames",
+    "stream=codec_type,width,height,pix_fmt,avg_frame_rate,nb_read_frames",
     "-show_entries",
     "format=duration",
     "-of",
@@ -59,7 +61,12 @@ export async function probeRenderedVideo(inputPath: string): Promise<RenderedVid
   ]);
   const inspected = JSON.parse(stdout) as FfprobeOutput;
   const video = inspected.streams?.find((stream) => stream.codec_type === "video");
-  if (video === undefined || video.width === undefined || video.height === undefined) {
+  if (
+    video === undefined ||
+    video.width === undefined ||
+    video.height === undefined ||
+    video.pix_fmt === undefined
+  ) {
     throw new Error("ffprobe did not find a video stream");
   }
   const durationSeconds = Number(inspected.format?.duration);
@@ -72,6 +79,7 @@ export async function probeRenderedVideo(inputPath: string): Promise<RenderedVid
   return {
     width: video.width,
     height: video.height,
+    pixelFormat: video.pix_fmt,
     fps: parseRate(video.avg_frame_rate),
     frameCount,
     durationSeconds: Number(durationSeconds.toFixed(6)),
@@ -117,6 +125,7 @@ export function assertFixtureContract(probe: RenderedVideoProbe): void {
   if (
     probe.width !== fixtureVideoContract.width ||
     probe.height !== fixtureVideoContract.height ||
+    probe.pixelFormat !== "yuv420p" ||
     probe.fps !== fixtureVideoContract.fps ||
     probe.frameCount !== fixtureVideoContract.frameCount ||
     probe.durationSeconds !== 1 ||

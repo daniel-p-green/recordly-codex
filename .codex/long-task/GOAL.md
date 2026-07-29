@@ -19,24 +19,23 @@ Deliver a public, reproducible Codex plugin named `recordly-codex` and a first v
 - `README.md`, `docs/architecture.md`, `docs/threat-model.md`, and `docs/licensing.md` define public scope and safety constraints.
 - `package.json`, `tsconfig.json`, `vitest.config.ts`, `biome.json`, and `.github/workflows/` define the reproducible engineering gate.
 - The public repository is `https://github.com/daniel-p-green/recordly-codex`, protected from direct changes, and its initial CI run is green. Plugin validation passes; a clean `npm ci` completes with zero reported audit vulnerabilities.
-- The completed local vertical slice includes the request/event contracts, a bounded CDP screencast capture adapter, immutable frame-hash verification, a canonical sanitized manifest, deterministic CFR timeline compilation, and deterministic render/encode fixtures.
-- A system-Chrome, loopback-only E2E fixture proves opening -> action -> result capture evidence, a compiled manifest and telemetry, a decoded MP4, and a sampled output frame without external requests. It produces a valid 1920x1080, 30 fps, 30-frame silent H.264 MP4.
-- The suite has 34 passing tests. Before final CI coverage-threshold configuration, the coverage report was 93.92% lines and 85.74% branches.
-- The Codex Desktop Browser-to-local-engine MCP/control bridge and a real approved public-site demo remain unproven.
+- The completed path includes five stdio MCP tools, a per-session Browser helper and loopback capture broker, immutable frame-hash verification, broker-owned receipt timing, deterministic CFR render/encode, and sealed delivery artifacts.
+- The test suite covers built stdio success and redacted failure responses, loopback browser capture/render, and receipt-timed delivery. Final approved live evidence exercised the supported authorized public-workflow path without publishing captured pixels, paths, identifiers, or hashes.
+- Codex Desktop Browser host support for `browser_run_code_unsafe` and marketplace installation remain release-time compatibility checks; neither is implied by a local build alone.
 
 ## Milestones
 
 1. Establish public repository governance, plugin scaffold, strict tooling, CI, and tag-gated source release. **Complete:** the public protected repository and initial CI run are green.
 2. Define versioned recording-manifest, shot-plan, and quality-report contracts with red tests. **Partially complete:** request/event/CFR/coordinate/frame-grid/zoom contracts and canonical recording-manifest compilation are implemented and tested; standalone shot-plan and quality-report contracts remain.
-3. Build a local deterministic vertical slice for a sanitized fixture: fixed viewport, bounded scripted interactions, capture evidence, basic cursor/click treatment, and MP4 export. **Complete for the system-Chrome loopback fixture; not yet complete for Codex Browser or a real approved public site.**
+3. Build a local deterministic vertical slice for a sanitized fixture: fixed viewport, bounded scripted interactions, capture evidence, basic cursor/click treatment, and MP4 export. **Complete for the supported Browser-helper and authorized public-workflow path; synthetic cursor/click/zoom polish remains intentionally out of scope without synchronized telemetry.**
 4. Add visual and technical quality gates with one bounded retry path and a manifest-backed final report.
 5. Validate installability in Codex Desktop, run a real approved-site demonstration, and publish a candid capability/limitation matrix.
 
 ## Done when
 
 - [x] A public repository contains a valid Codex plugin, contributor/security governance, and reproducible CI/release controls.
-- [ ] The plugin directs Codex through authorized Browser-only recording workflows without claiming unsupported autonomy.
-- [ ] A tested local vertical slice produces a 1080p MP4 and a sanitized versioned manifest from an approved public fixture. The completed proof uses an explicitly permitted loopback fixture, not a real approved public site.
+- [x] The plugin directs Codex through authorized Browser-only recording workflows without claiming unsupported autonomy.
+- [x] A tested local vertical slice produces a 1080p MP4, sanitized delivery manifest, and quality report for the supported approved workflow.
 - [ ] Automated checks verify browser action/result alignment, output dimensions/duration, decodeability, frozen-frame detection, clipping checks, and declared final state.
 - [x] The public documentation names the supported environment, privacy boundary, upstream license boundary, and human-intervention triggers.
 - [x] Remaining unsupported workflows and production risks are explicit.
