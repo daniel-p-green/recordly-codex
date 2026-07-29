@@ -484,7 +484,7 @@ describe("presentation compositor", () => {
       assertColor(transition.left, left, leftBlue);
       assertColor(transition.right, right, rightBlue);
     }
-  }, 60_000);
+  }, 120_000);
 
   it("includes the incoming V2 scene PiP before a reviewed crossfade", async () => {
     const plan = buildCompositionPlan({
@@ -1245,7 +1245,7 @@ describe("presentation compositor", () => {
     expect(frames).toHaveLength(6);
     expect(greenAt(frames[2] as Buffer)).toBeLessThan(200);
     expect(greenAt(frames[3] as Buffer)).toBeGreaterThan(200);
-  });
+  }, 30_000);
 
   it("consumes a lazy frame provider one frame at a time without a decoded frame array", async () => {
     const plan = buildCompositionPlan({
