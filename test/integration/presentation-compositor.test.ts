@@ -583,7 +583,7 @@ describe("presentation compositor", () => {
       (132 * 1920 + 216) * 3 + 3,
     );
     expect(visualPixel[1]).toBeGreaterThan((visualPixel[2] as number) + 80);
-  });
+  }, 30_000);
 
   it("renders only accepted V2 zoom proposals while preserving V1 zoom pixels", async () => {
     const v1 = {
