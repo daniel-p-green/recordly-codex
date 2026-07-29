@@ -15,6 +15,7 @@ type FfprobeStream = {
   width?: number;
   height?: number;
   pix_fmt?: string;
+  color_range?: string;
   avg_frame_rate?: string;
   nb_read_frames?: string;
 };
@@ -39,6 +40,7 @@ export type RenderedVideoProbe = {
   width: number;
   height: number;
   pixelFormat: string;
+  colorRange: string;
   fps: number;
   frameCount: number;
   durationSeconds: number;
@@ -52,7 +54,7 @@ export async function probeRenderedVideo(inputPath: string): Promise<RenderedVid
     "error",
     "-count_frames",
     "-show_entries",
-    "stream=codec_type,width,height,pix_fmt,avg_frame_rate,nb_read_frames",
+    "stream=codec_type,width,height,pix_fmt,color_range,avg_frame_rate,nb_read_frames",
     "-show_entries",
     "format=duration",
     "-of",
@@ -65,7 +67,8 @@ export async function probeRenderedVideo(inputPath: string): Promise<RenderedVid
     video === undefined ||
     video.width === undefined ||
     video.height === undefined ||
-    video.pix_fmt === undefined
+    video.pix_fmt === undefined ||
+    video.color_range === undefined
   ) {
     throw new Error("ffprobe did not find a video stream");
   }
@@ -80,6 +83,7 @@ export async function probeRenderedVideo(inputPath: string): Promise<RenderedVid
     width: video.width,
     height: video.height,
     pixelFormat: video.pix_fmt,
+    colorRange: video.color_range,
     fps: parseRate(video.avg_frame_rate),
     frameCount,
     durationSeconds: Number(durationSeconds.toFixed(6)),
@@ -126,6 +130,7 @@ export function assertFixtureContract(probe: RenderedVideoProbe): void {
     probe.width !== fixtureVideoContract.width ||
     probe.height !== fixtureVideoContract.height ||
     probe.pixelFormat !== "yuv420p" ||
+    probe.colorRange !== "tv" ||
     probe.fps !== fixtureVideoContract.fps ||
     probe.frameCount !== fixtureVideoContract.frameCount ||
     probe.durationSeconds !== 1 ||

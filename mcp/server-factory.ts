@@ -1,5 +1,5 @@
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
-
+import { createRecordingToolHandlers } from "./handlers.js";
 import {
   createRecordingSessionInputSchema,
   discardRecordingSessionInputSchema,
@@ -8,7 +8,6 @@ import {
   sealRecordingCaptureInputSchema,
   toolOutputSchema,
 } from "./schemas.js";
-import { createRecordingToolHandlers } from "./handlers.js";
 import type { RecordingSessionService } from "./types.js";
 
 const readOnlyAnnotations = {
@@ -26,7 +25,7 @@ const mutationAnnotations = {
 } as const;
 
 export function createRecordingMcpServer(service: RecordingSessionService): McpServer {
-  const server = new McpServer({ name: "recordly-codex-mcp-server", version: "0.1.0" });
+  const server = new McpServer({ name: "recordly-codex-mcp-server", version: "0.2.0" });
   const handlers = createRecordingToolHandlers(service);
   server.registerTool(
     "create_recording_session",

@@ -1,6 +1,15 @@
 import { execFile } from "node:child_process";
 import { createHash } from "node:crypto";
-import { lstat, mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
+import {
+  copyFile,
+  lstat,
+  mkdir,
+  mkdtemp,
+  readFile,
+  rm,
+  symlink,
+  writeFile,
+} from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { promisify } from "node:util";
@@ -22,7 +31,7 @@ async function sha256(path: string): Promise<string> {
     .digest("hex");
 }
 
-async function makeFrame(path: string, color: string): Promise<void> {
+async function makeFrame(path: string, interior: "black" | "white"): Promise<void> {
   const ffmpeg = await resolveMediaExecutable("ffmpeg");
   await execFileAsync(ffmpeg, [
     "-hide_banner",
@@ -31,7 +40,9 @@ async function makeFrame(path: string, color: string): Promise<void> {
     "-f",
     "lavfi",
     "-i",
-    `color=c=${color}:s=320x180`,
+    `color=c=${interior}:s=320x180`,
+    "-vf",
+    "drawbox=x=0:y=0:w=iw:h=12:c=red:t=fill,drawbox=x=iw-12:y=0:w=12:h=ih:c=green:t=fill,drawbox=x=0:y=ih-12:w=iw:h=12:c=blue:t=fill,drawbox=x=0:y=0:w=12:h=ih:c=yellow:t=fill",
     "-frames:v",
     "1",
     "-q:v",
@@ -46,6 +57,11 @@ async function fixture(
     state?: "active" | "sealed";
     timing?: "receipt" | "legacy";
     corruptHash?: boolean;
+    noObservedAction?: boolean;
+    noVisibleResult?: boolean;
+    lateAction?: boolean;
+    observedType?: "click" | "scroll";
+    plannedTelemetry?: boolean;
   } = {},
 ): Promise<{ artifactRoot: string; sessionId: string; sessionRoot: string }> {
   const artifactRoot = await mkdtemp(join(tmpdir(), "recordly-sealed-render-"));
@@ -54,11 +70,15 @@ async function fixture(
   const sessionRoot = join(artifactRoot, sessionId);
   const frameRoot = join(sessionRoot, "frames", "raw");
   await mkdir(frameRoot, { recursive: true, mode: 0o700 });
-  const colors = ["red", "green", "blue"];
-  for (let index = 0; index < colors.length; index += 1) {
-    await makeFrame(
+  const beforePath = join(frameRoot, "fixture-before.jpg");
+  const afterPath = join(frameRoot, "fixture-after.jpg");
+  await makeFrame(beforePath, "black");
+  await makeFrame(afterPath, options.noVisibleResult ? "black" : "white");
+  const frameCount = 24;
+  for (let index = 0; index < frameCount; index += 1) {
+    await copyFile(
+      index < 9 ? beforePath : afterPath,
       join(frameRoot, `frame-${String(index + 1).padStart(6, "0")}.jpg`),
-      colors[index] as string,
     );
   }
   const state = options.state ?? "sealed";
@@ -98,16 +118,16 @@ async function fixture(
       sessionId,
       origin: "https://demo.example",
       status: "stopped",
-      receivedFrames: 3,
-      acceptedFrames: 3,
-      ackedFrames: 3,
+      receivedFrames: frameCount,
+      acceptedFrames: frameCount,
+      ackedFrames: frameCount,
       rejectedFrames: 0,
       degradationRequested: false,
     })}\n`,
     { mode: 0o600 },
   );
   const lines: string[] = [];
-  for (let index = 0; index < 3; index += 1) {
+  for (let index = 0; index < frameCount; index += 1) {
     const frameId = index + 1;
     const imagePath = `frames/raw/frame-${String(frameId).padStart(6, "0")}.jpg`;
     const digest = await sha256(join(sessionRoot, imagePath));
@@ -127,7 +147,38 @@ async function fixture(
   await writeFile(join(sessionRoot, "capture-events.jsonl"), `${lines.join("\n")}\n`, {
     mode: 0o600,
   });
-  await writeFile(join(sessionRoot, "telemetry.ndjson"), "", { mode: 0o600 });
+  if (!options.noObservedAction) {
+    const type = options.observedType ?? "click";
+    await writeFile(
+      join(sessionRoot, "observed-events.jsonl"),
+      `${JSON.stringify({
+        schemaVersion: 1,
+        sessionId,
+        seq: 1,
+        type,
+        receiptOffsetUs: options.lateAction ? 700_000 : 250_000,
+        data:
+          type === "click"
+            ? { x: 160, y: 90, button: 0 }
+            : { x: 0, y: 720, deltaX: 0, deltaY: 720 },
+      })}\n`,
+      { mode: 0o600 },
+    );
+  }
+  await writeFile(
+    join(sessionRoot, "telemetry.ndjson"),
+    options.plannedTelemetry
+      ? `${JSON.stringify({
+          schemaVersion: 1,
+          sessionId,
+          seq: 0,
+          tUs: 250_000,
+          type: "pointer",
+          data: { x: 160, y: 90, buttons: 0, source: "planned" },
+        })}\n`
+      : "",
+    { mode: 0o600 },
+  );
   return { artifactRoot, sessionId, sessionRoot };
 }
 
@@ -167,23 +218,57 @@ describe("sealed session renderer", () => {
     expect(manifest.target).toEqual({ origin: "https://demo.example" });
     expect(JSON.stringify(manifest)).not.toContain("/private/path");
     expect(JSON.stringify(manifest)).not.toContain("frames/raw");
+    expect(JSON.stringify(manifest)).not.toContain("receiptOffsetUs");
     expect(manifest.timeline).toMatchObject({
       fps: 30,
-      frameCount: 3,
+      frameCount: 24,
       timingMode: "broker-receipt-offsets",
     });
+    expect(manifest.observedActions).toEqual([{ type: "click", x: 160, y: 90, cfrFrameIndex: 7 }]);
+    expect(manifest.render).toMatchObject({ pixelFormat: "yuv420p", colorRange: "tv" });
     expect(quality).toMatchObject({
       status: "approved",
       probe: {
         width: 1920,
         height: 1080,
         fps: 30,
-        frameCount: 3,
+        frameCount: 24,
         hasAudio: false,
         pixelFormat: "yuv420p",
+        colorRange: "tv",
       },
       timing: { mode: "broker-receipt-offsets", eligibleForApproval: true },
-      finalState: { present: true, sourceFrameId: 3 },
+      finalState: { present: true, sourceFrameId: 24 },
+      actionAlignment: {
+        status: "pass",
+        visibleChangeThreshold: 0.02,
+        finalHoldMinimumUs: 300000,
+        events: [
+          expect.objectContaining({
+            type: "click",
+            actionFrameIndex: 7,
+            preFrameIndex: 7,
+            resultFrameIndex: 9,
+            visibleChange: expect.any(Number),
+            finalHoldUs: 466667,
+            status: "pass",
+          }),
+        ],
+        proofScope: "temporal visible-result alignment; causal semantics are not asserted",
+      },
+      clipping: {
+        status: "pass",
+        borderPx: 12,
+        expectedContentRect: { x: 90, y: 51, width: 1740, height: 978 },
+        thresholds: {
+          maxEdgeColorDelta: 0.18,
+          maxCompositionColorDelta: 0.08,
+          maxAspectError: 0.005,
+        },
+        samples: expect.arrayContaining([
+          expect.objectContaining({ frameIndex: 0, edgesPresent: true }),
+        ]),
+      },
     });
     const videoStat = await lstat(rendered.videoPath);
     expect(videoStat.size).toBeGreaterThan(0);
@@ -204,6 +289,66 @@ describe("sealed session renderer", () => {
       timing: { mode: "legacy_ordered_cfr", eligibleForApproval: false },
     });
   }, 30_000);
+
+  it.each([
+    [
+      "planned telemetry without an observed action",
+      { noObservedAction: true, plannedTelemetry: true },
+    ],
+    ["no decoded visible result", { noVisibleResult: true }],
+    ["missing final-state hold", { lateAction: true }],
+  ])(
+    "blocks approval for %s",
+    async (_label, options) => {
+      const source = await fixture(options);
+
+      const rendered = await renderSealedSession(source);
+      const quality = JSON.parse(await readFile(rendered.qualityReportPath, "utf8"));
+
+      expect(rendered.approved).toBe(false);
+      expect(quality).toMatchObject({
+        status: "blocked",
+        actionAlignment: { status: "fail" },
+      });
+    },
+    30_000,
+  );
+
+  it("aligns an observed scroll with nonzero delta and visible decoded result", async () => {
+    const source = await fixture({ observedType: "scroll" });
+
+    const rendered = await renderSealedSession(source);
+    const manifest = JSON.parse(await readFile(rendered.manifestPath, "utf8"));
+
+    expect(rendered.approved).toBe(true);
+    expect(manifest.observedActions).toEqual([
+      { type: "scroll", x: 0, y: 720, deltaX: 0, deltaY: 720, cfrFrameIndex: 7 },
+    ]);
+  }, 30_000);
+
+  it("rejects observed action records outside the exact private schema", async () => {
+    const source = await fixture({ observedType: "scroll" });
+    const path = join(source.sessionRoot, "observed-events.jsonl");
+    const event = JSON.parse((await readFile(path, "utf8")).trim()) as {
+      data: Record<string, unknown> & { deltaY: number };
+    };
+    event.data.deltaY = 0;
+
+    await writeFile(path, `${JSON.stringify(event)}\n`, { mode: 0o600 });
+
+    await expect(renderSealedSession(source)).rejects.toThrow(/nonzero/u);
+  });
+
+  it("shares the broker's 10,000-record observed persistence bound", async () => {
+    const source = await fixture();
+    const path = join(source.sessionRoot, "observed-events.jsonl");
+    const line = (await readFile(path, "utf8")).trim();
+    await writeFile(path, `${Array.from({ length: 10_001 }, () => line).join("\n")}\n`, {
+      mode: 0o600,
+    });
+
+    await expect(renderSealedSession(source)).rejects.toThrow(/broker persistence bound/u);
+  });
 
   it.each([
     ["unsealed evidence", { state: "active" as const }, /sealed/u],
@@ -252,5 +397,19 @@ describe("sealed session renderer", () => {
     await expect(
       renderSealedSession({ artifactRoot: source.sessionRoot, sessionId: ".." }),
     ).rejects.toBeInstanceOf(SealedSessionRenderError);
+  });
+
+  it("rejects a frame whose ancestor directory is a symlink outside the verified session tree", async () => {
+    const source = await fixture();
+    const outside = await mkdtemp(join(tmpdir(), "recordly-frame-escape-"));
+    roots.push(outside);
+    await copyFile(
+      join(source.sessionRoot, "frames", "raw", "frame-000001.jpg"),
+      join(outside, "frame-000001.jpg"),
+    );
+    await rm(join(source.sessionRoot, "frames"), { recursive: true, force: true });
+    await symlink(outside, join(source.sessionRoot, "frames"));
+
+    await expect(renderSealedSession(source)).rejects.toThrow(/ancestor.*non-symlink directory/u);
   });
 });
