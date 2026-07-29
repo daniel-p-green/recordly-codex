@@ -162,7 +162,12 @@ export class BoundedRgbFrameAssembler {
       if (this.#current === undefined) this.#current = Buffer.allocUnsafe(this.#frameBytes);
       const available = this.#frameBytes - this.#currentOffset;
       const copied = Math.min(available, pending.chunk.length - pending.offset);
-      pending.chunk.copy(this.#current, this.#currentOffset, pending.offset, pending.offset + copied);
+      pending.chunk.copy(
+        this.#current,
+        this.#currentOffset,
+        pending.offset,
+        pending.offset + copied,
+      );
       this.#currentOffset += copied;
       this.#bytesCopied += copied;
       pending.offset += copied;

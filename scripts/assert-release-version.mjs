@@ -36,5 +36,10 @@ if (process.argv[1] !== undefined && resolve(process.argv[1]) === fileURLToPath(
   const plugin = JSON.parse(readFileSync(resolve(root, ".codex-plugin/plugin.json"), "utf8"));
   const lock = JSON.parse(readFileSync(resolve(root, "package-lock.json"), "utf8"));
   assertReleaseVersion(tag, pkg.version);
-  assertReleaseMetadataVersions(pkg.version, plugin.version, lock.version, lock.packages?.[""]?.version);
+  assertReleaseMetadataVersions(
+    pkg.version,
+    plugin.version,
+    lock.version,
+    lock.packages?.[""]?.version,
+  );
 }
