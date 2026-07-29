@@ -19,6 +19,7 @@ import { promisify } from "node:util";
 import { afterEach, describe, expect, it } from "vitest";
 import {
   createVerifiedCaptureSource,
+  readVerifiedCaptureEditorialEvidence,
   sourceKeyedPresentationEvidence,
 } from "../../mcp/project-render-source.js";
 import { resolveMediaExecutable } from "../../src/encoder/ffmpeg.js";
@@ -59,6 +60,155 @@ describe("source-keyed project render evidence", () => {
     });
   });
 
+  it("maps repeated CFR delivery slots to their declared capture frames and rejects an unknown frame ID", async () => {
+    const artifactRoot = await mkdtemp(join(tmpdir(), "recordly-editorial-evidence-"));
+    roots.push(artifactRoot);
+    const sessionId = "session-editorial";
+    const sessionRoot = join(artifactRoot, sessionId);
+    const rawRoot = join(sessionRoot, "frames", "raw");
+    await mkdir(join(sessionRoot, "artifacts"), { recursive: true, mode: 0o700 });
+    await mkdir(rawRoot, { recursive: true, mode: 0o700 });
+    await Promise.all([chmod(sessionRoot, 0o700), chmod(rawRoot, 0o700)]);
+    const first = Buffer.from("first-frame");
+    const second = Buffer.from("second-frame");
+    const firstSha256 = sha256(first);
+    const secondSha256 = sha256(second);
+    await Promise.all([
+      writeFile(join(rawRoot, "frame-000001.jpg"), first, { mode: 0o600 }),
+      writeFile(join(rawRoot, "frame-000002.jpg"), second, { mode: 0o600 }),
+    ]);
+    const timeline = {
+      durationUs: 100_000,
+      slots: [
+        { outputFrame: 0, tUs: 0, sourceFrameId: 1 },
+        { outputFrame: 1, tUs: 33_333, sourceFrameId: 1 },
+        { outputFrame: 2, tUs: 66_667, sourceFrameId: 2 },
+        { outputFrame: 3, tUs: 100_000, sourceFrameId: 2 },
+      ],
+    };
+    const source = {
+      id: "capture-editorial",
+      sessionId,
+      manifestSha256: "",
+      timelineSha256: sha256(canonicalJson(timeline)),
+      frameSetSha256: sha256(`${firstSha256}\n${secondSha256}`),
+      sourceWidth: 2,
+      sourceHeight: 2,
+      durationUs: 100_000,
+    };
+    const manifest = {
+      schemaVersion: 1,
+      kind: "recordly-codex-delivery",
+      sessionId,
+      source: { width: 2, height: 2, aggregateSha256: source.frameSetSha256 },
+      timeline,
+      cursorTrack: [],
+      observedActions: [{ cfrFrameIndex: 1, type: "click", x: 1, y: 1 }] as Array<
+        Record<string, unknown>
+      >,
+    };
+    const writeManifest = async () => {
+      const text = JSON.stringify(manifest);
+      source.manifestSha256 = sha256(text);
+      await writeFile(join(sessionRoot, "artifacts", "recording-manifest.json"), text, {
+        mode: 0o600,
+      });
+    };
+    await writeManifest();
+    await writeFile(
+      join(sessionRoot, "capture-events.jsonl"),
+      [
+        {
+          sessionId,
+          type: "frame",
+          frameId: 1,
+          receiptOffsetUs: 0,
+          imagePath: "frames/raw/frame-000001.jpg",
+          sha256: firstSha256,
+          width: 2,
+          height: 2,
+        },
+        {
+          sessionId,
+          type: "frame",
+          frameId: 2,
+          receiptOffsetUs: 100_000,
+          imagePath: "frames/raw/frame-000002.jpg",
+          sha256: secondSha256,
+          width: 2,
+          height: 2,
+        },
+      ]
+        .map((event) => JSON.stringify(event))
+        .join("\n")
+        .concat("\n"),
+      { mode: 0o600 },
+    );
+
+    await expect(
+      readVerifiedCaptureEditorialEvidence({ artifactRoot, source }),
+    ).resolves.toMatchObject({
+      observedEvents: [
+        {
+          sourceId: "capture-editorial",
+          tUs: 33_333,
+          kind: "click",
+          x: 1,
+          y: 1,
+        },
+      ],
+    });
+
+    manifest.observedActions = [
+      { cfrFrameIndex: 2, type: "scroll", x: 1, y: 1, deltaX: 0, deltaY: 24 },
+    ];
+    await writeManifest();
+    await expect(
+      readVerifiedCaptureEditorialEvidence({ artifactRoot, source }),
+    ).resolves.toMatchObject({ observedEvents: [{ tUs: 66_667, kind: "scroll" }] });
+
+    for (const malformedAction of [
+      { cfrFrameIndex: 2, type: "scroll", x: 1, y: 1, deltaX: 0, deltaY: 0 },
+      { cfrFrameIndex: 2, type: "scroll", x: 1, y: 1, deltaX: 1, deltaY: 1, extra: true },
+      { cfrFrameIndex: 2, type: "pointer", x: 1, y: 1 },
+      { cfrFrameIndex: -1, type: "click", x: 1, y: 1 },
+      { cfrFrameIndex: 4, type: "click", x: 1, y: 1 },
+      { cfrFrameIndex: 1, type: "click", x: 3, y: 1 },
+      { cfrFrameIndex: 1, type: "click", x: 1, y: 3 },
+      { cfrFrameIndex: 2, type: "scroll", x: 1, y: 1, deltaX: "invalid", deltaY: 1 },
+    ]) {
+      manifest.observedActions = [malformedAction];
+      await writeManifest();
+      await expect(readVerifiedCaptureEditorialEvidence({ artifactRoot, source })).rejects.toThrow(
+        /delivery action evidence is invalid/u,
+      );
+    }
+
+    const validSlots = timeline.slots.map((slot) => ({ ...slot }));
+    for (const slots of [
+      validSlots.map((slot, index) => (index === 3 ? { ...slot, outputFrame: 4 } : slot)),
+      validSlots.map((slot, index) => (index === 3 ? { ...slot, sourceFrameId: 0 } : slot)),
+      validSlots.map((slot, index) => (index === 3 ? { ...slot, sourceFrameId: 1.5 } : slot)),
+      validSlots.map((slot, index) => (index === 3 ? { ...slot, tUs: 100_001 } : slot)),
+      validSlots.map((slot, index) => (index === 3 ? { ...slot, tUs: 66_667 } : slot)),
+    ]) {
+      manifest.timeline.slots = slots;
+      manifest.observedActions = [{ cfrFrameIndex: 1, type: "click", x: 1, y: 1 }];
+      await writeManifest();
+      await expect(readVerifiedCaptureEditorialEvidence({ artifactRoot, source })).rejects.toThrow(
+        /delivery timeline slot timing is invalid/u,
+      );
+    }
+
+    manifest.timeline.slots = validSlots;
+    manifest.observedActions = [{ cfrFrameIndex: 1, type: "click", x: 1, y: 1 }];
+    manifest.timeline.slots[3] = { outputFrame: 3, tUs: 100_000, sourceFrameId: 3 };
+    await writeManifest();
+    await expect(readVerifiedCaptureEditorialEvidence({ artifactRoot, source })).rejects.toThrow(
+      /delivery timeline slot has no capture frame/u,
+    );
+  });
+
   it("rejects a capture frame replaced after validation instead of letting ffmpeg reopen it", async () => {
     const artifactRoot = await mkdtemp(join(tmpdir(), "recordly-frame-snapshot-"));
     roots.push(artifactRoot);
@@ -85,15 +235,15 @@ describe("source-keyed project render evidence", () => {
       manifestSha256: "",
       timelineSha256: sha256(canonicalJson(timeline)),
       frameSetSha256: sha256(frameSha256),
-      sourceWidth: 1,
-      sourceHeight: 1,
+      sourceWidth: 2,
+      sourceHeight: 2,
       durationUs: 1,
     };
     const manifest = {
       schemaVersion: 1,
       kind: "recordly-codex-delivery",
       sessionId,
-      source: { width: 1, height: 1, aggregateSha256: source.frameSetSha256 },
+      source: { width: 2, height: 2, aggregateSha256: source.frameSetSha256 },
       timeline,
       cursorTrack: [],
       observedActions: [],
@@ -112,8 +262,8 @@ describe("source-keyed project render evidence", () => {
         receiptOffsetUs: 1,
         imagePath: "frames/raw/frame-000001.png",
         sha256: frameSha256,
-        width: 1,
-        height: 1,
+        width: 2,
+        height: 2,
       })}\n`,
       { mode: 0o600 },
     );

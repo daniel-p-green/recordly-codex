@@ -1,0 +1,261 @@
+{
+  "schemaVersion": 1,
+  "kind": "recordly-codex-output-parity-fixture-manifest",
+  "suite": "output-parity-v1",
+  "description": "Clean-room, sanitized browser-demo output fixtures for behavioral composition acceptance.",
+  "outputParityDefinition": "Decoded output must preserve declared geometry, timing, required effects, and ordered checkpoints without pixel or source-file compatibility claims.",
+  "renderAcceptance": {
+    "durationMs": 1400,
+    "durationToleranceMs": 120,
+    "checkpointToleranceMs": 50,
+    "codec": {
+      "channelTolerance": 48,
+      "minimumDominance": 60
+    }
+  },
+  "provenance": {
+    "origin": "independently-authored-sanitized",
+    "recordlyMaterial": "none",
+    "assetPolicy": "repository-owned-minimal-fixtures"
+  },
+  "exclusions": [
+    "native-display-or-window-capture",
+    "microphone-or-system-audio-capture",
+    "graphical-timeline-editor",
+    "recordly-project-file-compatibility",
+    "extensions-or-marketplace-execution",
+    "pixel-for-pixel-or-source-compatibility"
+  ],
+  "assets": [
+    {
+      "id": "independent-checker",
+      "path": "assets/independent-checker.ppm",
+      "mediaType": "image/x-portable-pixmap",
+      "sha256": "279fbbbb3dd8f88b052647cb4b472798e5767621f78323c827a6e06491f62af6"
+    }
+  ],
+  "fixtures": [
+    {
+      "id": "landscape-mp4",
+      "profile": "landscape-1080p",
+      "output": { "width": 1920, "height": 1080, "fps": 30, "format": "mp4" },
+      "sourceAssetId": "independent-checker",
+      "requiredEffects": [
+        "trim",
+        "speed",
+        "crossfade",
+        "reviewed-zoom",
+        "cursor",
+        "click-effect",
+        "frame-style",
+        "caption",
+        "annotation"
+      ],
+      "decodedCheckpoints": [
+        {
+          "id": "opening",
+          "kind": "opening",
+          "atOutputMs": 0,
+          "assertions": ["decoded-frame", "output-geometry", "frame-style"]
+        },
+        {
+          "id": "effect",
+          "kind": "effect",
+          "atOutputMs": 500,
+          "assertions": ["decoded-frame", "zoom", "cursor", "click-effect", "caption", "annotation"]
+        },
+        {
+          "id": "final",
+          "kind": "final",
+          "atOutputMs": 1000,
+          "assertions": ["decoded-frame", "crossfade-complete", "final-state"]
+        }
+      ]
+    },
+    {
+      "id": "landscape-gif",
+      "profile": "landscape-1080p",
+      "output": { "width": 1920, "height": 1080, "fps": 30, "format": "gif" },
+      "sourceAssetId": "independent-checker",
+      "requiredEffects": [
+        "trim",
+        "speed",
+        "crossfade",
+        "reviewed-zoom",
+        "cursor",
+        "click-effect",
+        "frame-style",
+        "caption",
+        "annotation"
+      ],
+      "decodedCheckpoints": [
+        {
+          "id": "opening",
+          "kind": "opening",
+          "atOutputMs": 0,
+          "assertions": ["decoded-frame", "output-geometry", "frame-style"]
+        },
+        {
+          "id": "effect",
+          "kind": "effect",
+          "atOutputMs": 500,
+          "assertions": ["decoded-frame", "zoom", "cursor", "click-effect", "caption", "annotation"]
+        },
+        {
+          "id": "final",
+          "kind": "final",
+          "atOutputMs": 1000,
+          "assertions": ["decoded-frame", "crossfade-complete", "final-state"]
+        }
+      ]
+    },
+    {
+      "id": "square-mp4",
+      "profile": "square-1080",
+      "output": { "width": 1080, "height": 1080, "fps": 30, "format": "mp4" },
+      "sourceAssetId": "independent-checker",
+      "requiredEffects": [
+        "trim",
+        "speed",
+        "crossfade",
+        "reviewed-zoom",
+        "cursor",
+        "click-effect",
+        "frame-style",
+        "caption",
+        "annotation"
+      ],
+      "decodedCheckpoints": [
+        {
+          "id": "opening",
+          "kind": "opening",
+          "atOutputMs": 0,
+          "assertions": ["decoded-frame", "output-geometry", "frame-style"]
+        },
+        {
+          "id": "effect",
+          "kind": "effect",
+          "atOutputMs": 500,
+          "assertions": ["decoded-frame", "zoom", "cursor", "click-effect", "caption", "annotation"]
+        },
+        {
+          "id": "final",
+          "kind": "final",
+          "atOutputMs": 1000,
+          "assertions": ["decoded-frame", "crossfade-complete", "final-state"]
+        }
+      ]
+    },
+    {
+      "id": "square-gif",
+      "profile": "square-1080",
+      "output": { "width": 1080, "height": 1080, "fps": 30, "format": "gif" },
+      "sourceAssetId": "independent-checker",
+      "requiredEffects": [
+        "trim",
+        "speed",
+        "crossfade",
+        "reviewed-zoom",
+        "cursor",
+        "click-effect",
+        "frame-style",
+        "caption",
+        "annotation"
+      ],
+      "decodedCheckpoints": [
+        {
+          "id": "opening",
+          "kind": "opening",
+          "atOutputMs": 0,
+          "assertions": ["decoded-frame", "output-geometry", "frame-style"]
+        },
+        {
+          "id": "effect",
+          "kind": "effect",
+          "atOutputMs": 500,
+          "assertions": ["decoded-frame", "zoom", "cursor", "click-effect", "caption", "annotation"]
+        },
+        {
+          "id": "final",
+          "kind": "final",
+          "atOutputMs": 1000,
+          "assertions": ["decoded-frame", "crossfade-complete", "final-state"]
+        }
+      ]
+    },
+    {
+      "id": "vertical-mp4",
+      "profile": "vertical-1080",
+      "output": { "width": 1080, "height": 1920, "fps": 30, "format": "mp4" },
+      "sourceAssetId": "independent-checker",
+      "requiredEffects": [
+        "trim",
+        "speed",
+        "crossfade",
+        "reviewed-zoom",
+        "cursor",
+        "click-effect",
+        "frame-style",
+        "caption",
+        "annotation"
+      ],
+      "decodedCheckpoints": [
+        {
+          "id": "opening",
+          "kind": "opening",
+          "atOutputMs": 0,
+          "assertions": ["decoded-frame", "output-geometry", "frame-style"]
+        },
+        {
+          "id": "effect",
+          "kind": "effect",
+          "atOutputMs": 500,
+          "assertions": ["decoded-frame", "zoom", "cursor", "click-effect", "caption", "annotation"]
+        },
+        {
+          "id": "final",
+          "kind": "final",
+          "atOutputMs": 1000,
+          "assertions": ["decoded-frame", "crossfade-complete", "final-state"]
+        }
+      ]
+    },
+    {
+      "id": "vertical-gif",
+      "profile": "vertical-1080",
+      "output": { "width": 1080, "height": 1920, "fps": 30, "format": "gif" },
+      "sourceAssetId": "independent-checker",
+      "requiredEffects": [
+        "trim",
+        "speed",
+        "crossfade",
+        "reviewed-zoom",
+        "cursor",
+        "click-effect",
+        "frame-style",
+        "caption",
+        "annotation"
+      ],
+      "decodedCheckpoints": [
+        {
+          "id": "opening",
+          "kind": "opening",
+          "atOutputMs": 0,
+          "assertions": ["decoded-frame", "output-geometry", "frame-style"]
+        },
+        {
+          "id": "effect",
+          "kind": "effect",
+          "atOutputMs": 500,
+          "assertions": ["decoded-frame", "zoom", "cursor", "click-effect", "caption", "annotation"]
+        },
+        {
+          "id": "final",
+          "kind": "final",
+          "atOutputMs": 1000,
+          "assertions": ["decoded-frame", "crossfade-complete", "final-state"]
+        }
+      ]
+    }
+  ]
+}

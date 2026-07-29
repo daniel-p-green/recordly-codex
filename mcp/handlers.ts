@@ -1,18 +1,39 @@
-import { join, resolve } from "node:path";
-import { validateRecordingProject } from "../src/project/index.js";
+import { type EditorialProposal, validateEditorialProposal } from "../src/analysis/index.js";
+import {
+  validateRecordingProfileReference,
+  validateRecordingProject,
+} from "../src/project/index.js";
+import type { PreviewInspection } from "./preview-inspection.js";
 import type {
+  ApplyAcceptedEditorialProposalInput,
+  ApplyRecordingProfileInput,
+  CreateRecordingProfileInput,
   CreateRecordingProjectInput,
   CreateRecordingSessionInput,
   DiscardRecordingSessionInput,
+  GetRecordingProfileInput,
+  ImportRecordingProjectMediaInput,
   InspectRecordingProjectInput,
+  InspectRecordingProjectPreviewInput,
   InspectRecordingSessionInput,
+  JudgeRecordingProjectPreviewInput,
+  ListRecordingProfilesInput,
+  ProposeRecordingProjectEditorialInput,
   RecordBrowserEventInput,
   RenderRecordingProjectInput,
   ReviseRecordingProjectInput,
   SealRecordingCaptureInput,
+  SessionOutput,
   SuccessfulToolOutput,
+  UpdateRecordingProfileInput,
 } from "./schemas.js";
-import type { RecordingMcpService, RecordingProjectView, RecordingSessionView } from "./types.js";
+import { toolOutputSchema } from "./schemas.js";
+import type {
+  ImportedRecordingProjectMedia,
+  RecordingMcpService,
+  RecordingProjectView,
+  RecordingSessionView,
+} from "./types.js";
 
 type Operation =
   | "create_recording_session"
@@ -24,7 +45,30 @@ type Operation =
   | "inspect_recording_project"
   | "revise_recording_project"
   | "render_recording_project_preview"
-  | "render_recording_project_final";
+  | "render_recording_project_final"
+  | "inspect_recording_project_preview"
+  | "judge_recording_project_preview"
+  | "import_recording_project_media"
+  | "list_recording_profiles"
+  | "get_recording_profile"
+  | "create_recording_profile"
+  | "update_recording_profile"
+  | "apply_recording_profile"
+  | "propose_recording_project_editorial"
+  | "apply_accepted_recording_project_editorial";
+
+type SessionOperation =
+  | "create_recording_session"
+  | "record_browser_event"
+  | "inspect_recording_session"
+  | "seal_recording_capture"
+  | "discard_recording_session";
+
+type SessionSuccess = {
+  ok: true;
+  operation: SessionOperation;
+  session: SessionOutput;
+};
 
 type ToolErrorOutput = {
   ok: false;
@@ -32,29 +76,85 @@ type ToolErrorOutput = {
   error: { code: "invalid_input" | "service_unavailable" | "operation_failed" };
 };
 
-type ProjectSuccess = {
+type ProjectOutput = {
+  project: unknown;
+  projectSha256: string;
+};
+
+type RenderOutput = NonNullable<RecordingProjectView["render"]>;
+type JudgmentOutput = NonNullable<RecordingProjectView["previewJudgment"]>;
+
+type ProjectSuccess =
+  | {
+      ok: true;
+      operation:
+        | "create_recording_project"
+        | "inspect_recording_project"
+        | "revise_recording_project"
+        | "apply_recording_profile"
+        | "apply_accepted_recording_project_editorial";
+      project: ProjectOutput;
+    }
+  | {
+      ok: true;
+      operation: "render_recording_project_preview" | "render_recording_project_final";
+      project: ProjectOutput;
+      render: RenderOutput;
+    }
+  | {
+      ok: true;
+      operation: "judge_recording_project_preview";
+      project: ProjectOutput;
+      judgment: JudgmentOutput;
+    };
+
+type PreviewInspectionSuccess = {
   ok: true;
-  operation: Exclude<
-    Operation,
-    | "create_recording_session"
-    | "record_browser_event"
-    | "inspect_recording_session"
-    | "seal_recording_capture"
-    | "discard_recording_session"
-  >;
-  project: { project: unknown; projectSha256: string };
-  render?: {
-    kind: "preview" | "final";
-    revision: number;
-    format: "mp4" | "gif";
-    artifact: string;
-    sha256: string;
-  };
+  operation: "inspect_recording_project_preview";
+  inspection: PreviewInspection["evidence"];
+};
+
+type MediaImportSuccess = {
+  ok: true;
+  operation: "import_recording_project_media";
+  media: ImportedRecordingProjectMedia;
+};
+
+type ProfileSuccess = {
+  ok: true;
+  operation:
+    | "list_recording_profiles"
+    | "get_recording_profile"
+    | "create_recording_profile"
+    | "update_recording_profile";
+  profiles?: readonly {
+    source: "builtin" | "owner-local";
+    profileId: string;
+    profileRevision: number;
+    snapshotSha256: string;
+  }[];
+  profile?: ReturnType<typeof validateRecordingProfileReference>;
+};
+
+type EditorialProposalSuccess = {
+  ok: true;
+  operation: "propose_recording_project_editorial";
+  proposal: EditorialProposal;
 };
 
 export type ToolResult = {
-  content: [{ type: "text"; text: string }];
-  structuredContent: SuccessfulToolOutput | ProjectSuccess | ToolErrorOutput;
+  content: Array<
+    { type: "text"; text: string } | { type: "image"; data: string; mimeType: "image/png" }
+  >;
+  structuredContent:
+    | SuccessfulToolOutput
+    | SessionSuccess
+    | ProjectSuccess
+    | PreviewInspectionSuccess
+    | MediaImportSuccess
+    | ProfileSuccess
+    | EditorialProposalSuccess
+    | ToolErrorOutput;
   isError?: true;
 };
 
@@ -82,7 +182,7 @@ function containedAbsolutePath(root: string, value: string): boolean {
     .every((segment) => segment.length > 0 && segment !== ".");
 }
 
-function safeSession(view: RecordingSessionView): SuccessfulToolOutput["session"] {
+function safeSession(view: RecordingSessionView): SessionOutput {
   if (
     !/^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$/u.test(view.sessionId) ||
     !/^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$/u.test(view.requestId) ||
@@ -91,11 +191,10 @@ function safeSession(view: RecordingSessionView): SuccessfulToolOutput["session"
   ) {
     throw new Error("service returned an invalid session view");
   }
-  const browserHelperRoot = join(resolve(process.cwd()), ".playwright-mcp", "recordly-codex");
   if (
     !containedAbsolutePath(view.artifactRoot, view.captureConfigPath) ||
     ![view.browserStartHelperPath, view.browserStopHelperPath].every((path) =>
-      containedAbsolutePath(browserHelperRoot, path),
+      containedAbsolutePath(view.browserHelperRoot, path),
     )
   ) {
     throw new Error("service returned an unsafe artifact path");
@@ -124,29 +223,49 @@ function safeSession(view: RecordingSessionView): SuccessfulToolOutput["session"
       containedAbsolutePath(view.artifactRoot, path),
     ),
   };
+  const capture = view.capture;
+  if (
+    capture !== undefined &&
+    (!Number.isSafeInteger(capture.maxCaptureSeconds) ||
+      capture.maxCaptureSeconds < 1 ||
+      capture.maxCaptureSeconds > 300 ||
+      !Number.isSafeInteger(capture.maxAcceptedFrames) ||
+      capture.maxAcceptedFrames < 1 ||
+      capture.maxAcceptedFrames > 9_000 ||
+      !Number.isSafeInteger(capture.maxAcceptedBytes) ||
+      capture.maxAcceptedBytes < 1 ||
+      capture.maxAcceptedBytes > 512 * 1024 * 1024 ||
+      !Number.isSafeInteger(capture.acceptedFrames) ||
+      capture.acceptedFrames < 0 ||
+      capture.acceptedFrames > capture.maxAcceptedFrames ||
+      !Number.isSafeInteger(capture.acceptedBytes) ||
+      capture.acceptedBytes < 0 ||
+      capture.acceptedBytes > capture.maxAcceptedBytes ||
+      (capture.reason !== undefined && capture.reason !== "budget_exceeded"))
+  ) {
+    throw new Error("service returned invalid capture status");
+  }
+  const withCapture = capture === undefined ? session : { ...session, capture };
   return hasDelivery
     ? {
-        ...session,
+        ...withCapture,
         videoPath: view.videoPath as string,
         manifestPath: view.manifestPath as string,
         qualityReportPath: view.qualityReportPath as string,
       }
-    : session;
+    : withCapture;
 }
 
-function success(operation: Operation, view: RecordingSessionView): ToolResult {
-  const structuredContent: SuccessfulToolOutput = {
+function success(operation: SessionOperation, view: RecordingSessionView): ToolResult {
+  const structuredContent: SessionSuccess = {
     ok: true,
     operation,
     session: safeSession(view),
   };
-  return {
-    content: [{ type: "text", text: JSON.stringify(structuredContent) }],
-    structuredContent,
-  };
+  return successfulResult(structuredContent);
 }
 
-function safeProject(view: RecordingProjectView): ProjectSuccess["project"] {
+function safeProject(view: RecordingProjectView): ProjectOutput {
   const project = validateRecordingProject(view.project);
   if (!/^[a-f0-9]{64}$/u.test(view.projectSha256)) {
     throw new Error("service returned an invalid project digest");
@@ -154,7 +273,7 @@ function safeProject(view: RecordingProjectView): ProjectSuccess["project"] {
   return { project, projectSha256: view.projectSha256 };
 }
 
-function safeRender(view: RecordingProjectView): ProjectSuccess["render"] | undefined {
+function safeRender(view: RecordingProjectView): RenderOutput | undefined {
   if (view.render === undefined) return undefined;
   const { artifact } = view.render;
   if (
@@ -172,13 +291,63 @@ function projectSuccess(
   operation: ProjectSuccess["operation"],
   view: RecordingProjectView,
 ): ToolResult {
-  const render = safeRender(view);
-  const structuredContent: ProjectSuccess = {
+  const project = safeProject(view);
+  switch (operation) {
+    case "render_recording_project_preview":
+    case "render_recording_project_final": {
+      const render = safeRender(view);
+      const expectedKind = operation === "render_recording_project_preview" ? "preview" : "final";
+      if (render === undefined || render.kind !== expectedKind) {
+        throw new Error("service returned a render for the wrong operation");
+      }
+      return successfulResult({ ok: true, operation, project, render });
+    }
+    case "judge_recording_project_preview":
+      if (view.previewJudgment === undefined) {
+        throw new Error("service returned no preview judgment");
+      }
+      return successfulResult({
+        ok: true,
+        operation,
+        project,
+        judgment: view.previewJudgment,
+      });
+    default:
+      return successfulResult({ ok: true, operation, project });
+  }
+}
+
+function previewInspectionSuccess(value: PreviewInspection): ToolResult {
+  const structuredContent: PreviewInspectionSuccess = {
     ok: true,
-    operation,
-    project: safeProject(view),
-    ...(render === undefined ? {} : { render }),
+    operation: "inspect_recording_project_preview",
+    inspection: value.evidence,
   };
+  if (!toolOutputSchema.safeParse(structuredContent).success) {
+    throw new Error("service returned an invalid preview inspection output");
+  }
+  const imageBytes = Buffer.from(value.image.data, "base64");
+  if (
+    value.image.mimeType !== "image/png" ||
+    imageBytes.length === 0 ||
+    imageBytes.length > 1_500_000 ||
+    imageBytes.toString("base64") !== value.image.data
+  ) {
+    throw new Error("service returned an invalid preview inspection image");
+  }
+  return {
+    content: [
+      { type: "text", text: JSON.stringify(structuredContent) },
+      { type: "image", data: value.image.data, mimeType: "image/png" },
+    ],
+    structuredContent,
+  };
+}
+
+function successfulResult(structuredContent: ToolResult["structuredContent"]): ToolResult {
+  if (!toolOutputSchema.safeParse(structuredContent).success) {
+    throw new Error("service returned an invalid successful tool output");
+  }
   return {
     content: [{ type: "text", text: JSON.stringify(structuredContent) }],
     structuredContent,
@@ -194,8 +363,59 @@ function error(operation: Operation, code: ToolErrorOutput["error"]["code"]): To
   };
 }
 
+function safeProfileSummary(value: unknown): {
+  source: "builtin" | "owner-local";
+  profileId: string;
+  profileRevision: number;
+  snapshotSha256: string;
+} {
+  if (
+    value === null ||
+    typeof value !== "object" ||
+    Array.isArray(value) ||
+    Object.getOwnPropertyNames(value).length !== 4
+  ) {
+    throw new Error("service returned an invalid profile summary");
+  }
+  const profile = value as {
+    source?: unknown;
+    profileId?: unknown;
+    profileRevision?: unknown;
+    snapshotSha256?: unknown;
+  };
+  if (
+    !["builtin", "owner-local"].includes(String(profile.source)) ||
+    typeof profile.profileId !== "string" ||
+    !/^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$/u.test(profile.profileId) ||
+    !Number.isSafeInteger(profile.profileRevision) ||
+    (profile.profileRevision as number) < 1 ||
+    typeof profile.snapshotSha256 !== "string" ||
+    !/^[a-f0-9]{64}$/u.test(profile.snapshotSha256)
+  ) {
+    throw new Error("service returned an invalid profile summary");
+  }
+  return {
+    source: profile.source as "builtin" | "owner-local",
+    profileId: profile.profileId,
+    profileRevision: profile.profileRevision as number,
+    snapshotSha256: profile.snapshotSha256,
+  };
+}
+
+function profileSuccess(value: ProfileSuccess): ToolResult {
+  return successfulResult(value);
+}
+
+function editorialProposalSuccess(value: unknown): ToolResult {
+  return successfulResult({
+    ok: true,
+    operation: "propose_recording_project_editorial",
+    proposal: validateEditorialProposal(value),
+  });
+}
+
 async function execute(
-  operation: Operation,
+  operation: SessionOperation,
   work: () => Promise<RecordingSessionView>,
 ): Promise<ToolResult> {
   try {
@@ -218,6 +438,20 @@ export function createRecordingToolHandlers(service: RecordingMcpService): {
   reviseRecordingProject(input: ReviseRecordingProjectInput): Promise<ToolResult>;
   renderRecordingProjectPreview(input: RenderRecordingProjectInput): Promise<ToolResult>;
   renderRecordingProjectFinal(input: RenderRecordingProjectInput): Promise<ToolResult>;
+  inspectRecordingProjectPreview(input: InspectRecordingProjectPreviewInput): Promise<ToolResult>;
+  judgeRecordingProjectPreview(input: JudgeRecordingProjectPreviewInput): Promise<ToolResult>;
+  importRecordingProjectMedia(input: ImportRecordingProjectMediaInput): Promise<ToolResult>;
+  listRecordingProfiles(input: ListRecordingProfilesInput): Promise<ToolResult>;
+  getRecordingProfile(input: GetRecordingProfileInput): Promise<ToolResult>;
+  createRecordingProfile(input: CreateRecordingProfileInput): Promise<ToolResult>;
+  updateRecordingProfile(input: UpdateRecordingProfileInput): Promise<ToolResult>;
+  applyRecordingProfile(input: ApplyRecordingProfileInput): Promise<ToolResult>;
+  proposeRecordingProjectEditorial(
+    input: ProposeRecordingProjectEditorialInput,
+  ): Promise<ToolResult>;
+  applyAcceptedRecordingProjectEditorial(
+    input: ApplyAcceptedEditorialProposalInput,
+  ): Promise<ToolResult>;
 } {
   return {
     createRecordingSession: (input) =>
@@ -225,10 +459,18 @@ export function createRecordingToolHandlers(service: RecordingMcpService): {
         service.create({
           url: input.url,
           objective: input.objective,
-          ...(input.allowedOrigins === undefined ? {} : { allowedOrigins: input.allowedOrigins }),
           ...(input.allowPrivateOrigin === undefined
             ? {}
             : { allowPrivateOrigin: input.allowPrivateOrigin }),
+          ...(input.maxCaptureSeconds === undefined
+            ? {}
+            : { maxCaptureSeconds: input.maxCaptureSeconds }),
+          ...(input.maxAcceptedFrames === undefined
+            ? {}
+            : { maxAcceptedFrames: input.maxAcceptedFrames }),
+          ...(input.maxAcceptedBytes === undefined
+            ? {}
+            : { maxAcceptedBytes: input.maxAcceptedBytes }),
         }),
       ),
     recordBrowserEvent: (input) =>
@@ -313,6 +555,127 @@ export function createRecordingToolHandlers(service: RecordingMcpService): {
         );
       } catch {
         return error("render_recording_project_final", "operation_failed");
+      }
+    },
+    inspectRecordingProjectPreview: async (input) => {
+      if (service.inspectPreview === undefined) {
+        return error("inspect_recording_project_preview", "service_unavailable");
+      }
+      try {
+        return previewInspectionSuccess(await service.inspectPreview(input));
+      } catch {
+        return error("inspect_recording_project_preview", "operation_failed");
+      }
+    },
+    judgeRecordingProjectPreview: async (input) => {
+      if (service.judgePreview === undefined) {
+        return error("judge_recording_project_preview", "service_unavailable");
+      }
+      try {
+        return projectSuccess("judge_recording_project_preview", await service.judgePreview(input));
+      } catch {
+        return error("judge_recording_project_preview", "operation_failed");
+      }
+    },
+    importRecordingProjectMedia: async (input) => {
+      if (service.importProjectMedia === undefined) {
+        return error("import_recording_project_media", "service_unavailable");
+      }
+      try {
+        const media = await service.importProjectMedia(input);
+        const structuredContent: MediaImportSuccess = {
+          ok: true,
+          operation: "import_recording_project_media",
+          media,
+        };
+        return successfulResult(structuredContent);
+      } catch (caught) {
+        if (caught instanceof RecordingServiceUnavailableError)
+          return error("import_recording_project_media", "service_unavailable");
+        return error("import_recording_project_media", "operation_failed");
+      }
+    },
+    listRecordingProfiles: async () => {
+      if (service.listProfiles === undefined)
+        return error("list_recording_profiles", "service_unavailable");
+      try {
+        const profiles = (await service.listProfiles({})).map(safeProfileSummary);
+        if (profiles.length > 35) throw new Error("service returned too many profiles");
+        return profileSuccess({ ok: true, operation: "list_recording_profiles", profiles });
+      } catch {
+        return error("list_recording_profiles", "operation_failed");
+      }
+    },
+    getRecordingProfile: async (input) => {
+      if (service.getProfile === undefined)
+        return error("get_recording_profile", "service_unavailable");
+      try {
+        return profileSuccess({
+          ok: true,
+          operation: "get_recording_profile",
+          profile: validateRecordingProfileReference(await service.getProfile(input)),
+        });
+      } catch {
+        return error("get_recording_profile", "operation_failed");
+      }
+    },
+    createRecordingProfile: async (input) => {
+      if (service.createProfile === undefined)
+        return error("create_recording_profile", "service_unavailable");
+      try {
+        return profileSuccess({
+          ok: true,
+          operation: "create_recording_profile",
+          profile: validateRecordingProfileReference(await service.createProfile(input)),
+        });
+      } catch {
+        return error("create_recording_profile", "operation_failed");
+      }
+    },
+    updateRecordingProfile: async (input) => {
+      if (service.updateProfile === undefined)
+        return error("update_recording_profile", "service_unavailable");
+      try {
+        return profileSuccess({
+          ok: true,
+          operation: "update_recording_profile",
+          profile: validateRecordingProfileReference(await service.updateProfile(input)),
+        });
+      } catch {
+        return error("update_recording_profile", "operation_failed");
+      }
+    },
+    applyRecordingProfile: async (input) => {
+      if (service.applyProfile === undefined)
+        return error("apply_recording_profile", "service_unavailable");
+      try {
+        return projectSuccess(
+          "apply_recording_profile",
+          await service.applyProfile({ ...input, mode: input.mode ?? "manual" }),
+        );
+      } catch {
+        return error("apply_recording_profile", "operation_failed");
+      }
+    },
+    proposeRecordingProjectEditorial: async (input) => {
+      if (service.proposeEditorial === undefined)
+        return error("propose_recording_project_editorial", "service_unavailable");
+      try {
+        return editorialProposalSuccess(await service.proposeEditorial(input));
+      } catch {
+        return error("propose_recording_project_editorial", "operation_failed");
+      }
+    },
+    applyAcceptedRecordingProjectEditorial: async (input) => {
+      if (service.applyAcceptedEditorialProposal === undefined)
+        return error("apply_accepted_recording_project_editorial", "service_unavailable");
+      try {
+        return projectSuccess(
+          "apply_accepted_recording_project_editorial",
+          await service.applyAcceptedEditorialProposal(input),
+        );
+      } catch {
+        return error("apply_accepted_recording_project_editorial", "operation_failed");
       }
     },
   };

@@ -19,6 +19,7 @@ import { afterEach, describe, expect, it } from "vitest";
 import { createSessionStoreService } from "../../mcp/session-store-service.js";
 import { resolveMediaExecutable } from "../../src/encoder/ffmpeg.js";
 import { renderSealedSession, SealedSessionRenderError } from "../../src/render/sealed-session.js";
+import { parsePpm } from "../support/ppm.js";
 
 const execFileAsync = promisify(execFile);
 const roots: string[] = [];
@@ -33,7 +34,34 @@ async function sha256(path: string): Promise<string> {
     .digest("hex");
 }
 
-async function makeFrame(path: string, interior: "black" | "white"): Promise<void> {
+async function makeFrame(
+  path: string,
+  interior: "black" | "white",
+  options: { dimensions?: "320x180" | "947x900"; thinRightScrollbar?: boolean } = {},
+): Promise<void> {
+  const ffmpeg = await resolveMediaExecutable("ffmpeg");
+  const dimensions = options.dimensions ?? "320x180";
+  const scrollbar = options.thinRightScrollbar ? ",drawbox=x=iw-3:y=0:w=3:h=ih:c=white:t=fill" : "";
+  await execFileAsync(ffmpeg, [
+    "-hide_banner",
+    "-loglevel",
+    "error",
+    "-f",
+    "lavfi",
+    "-i",
+    `color=c=${interior}:s=${dimensions}`,
+    "-vf",
+    `drawbox=x=0:y=0:w=iw:h=12:c=red:t=fill,drawbox=x=iw-12:y=0:w=12:h=ih:c=green:t=fill,drawbox=x=0:y=ih-12:w=iw:h=12:c=blue:t=fill,drawbox=x=0:y=0:w=12:h=ih:c=yellow:t=fill${scrollbar}`,
+    "-frames:v",
+    "1",
+    "-q:v",
+    "2",
+    "-y",
+    path,
+  ]);
+}
+
+async function makeTemporalVisual(path: string, first: string, second: string): Promise<void> {
   const ffmpeg = await resolveMediaExecutable("ffmpeg");
   await execFileAsync(ffmpeg, [
     "-hide_banner",
@@ -42,16 +70,76 @@ async function makeFrame(path: string, interior: "black" | "white"): Promise<voi
     "-f",
     "lavfi",
     "-i",
-    `color=c=${interior}:s=320x180`,
-    "-vf",
-    "drawbox=x=0:y=0:w=iw:h=12:c=red:t=fill,drawbox=x=iw-12:y=0:w=12:h=ih:c=green:t=fill,drawbox=x=0:y=ih-12:w=iw:h=12:c=blue:t=fill,drawbox=x=0:y=0:w=12:h=ih:c=yellow:t=fill",
-    "-frames:v",
-    "1",
-    "-q:v",
-    "2",
+    `color=c=${first}:s=64x32:r=30:d=0.4`,
+    "-f",
+    "lavfi",
+    "-i",
+    `color=c=${second}:s=64x32:r=30:d=0.4`,
+    "-filter_complex",
+    "[0:v][1:v]concat=n=2:v=1:a=0",
+    "-an",
+    "-c:v",
+    "libx264",
+    "-pix_fmt",
+    "yuv420p",
     "-y",
     path,
   ]);
+}
+
+async function makeImportAudio(path: string): Promise<void> {
+  const codec = path.endsWith(".mp3") ? "libmp3lame" : path.endsWith(".m4a") ? "aac" : "pcm_s16le";
+  await execFileAsync(await resolveMediaExecutable("ffmpeg"), [
+    "-hide_banner",
+    "-loglevel",
+    "error",
+    "-f",
+    "lavfi",
+    "-i",
+    "sine=frequency=440:sample_rate=44100:duration=0.4",
+    "-c:a",
+    codec,
+    "-y",
+    path,
+  ]);
+}
+
+async function decodePpm(
+  inputPath: string,
+  timeSeconds: number,
+  outputPath: string,
+): Promise<Buffer> {
+  await execFileAsync(await resolveMediaExecutable("ffmpeg"), [
+    "-hide_banner",
+    "-loglevel",
+    "error",
+    "-ss",
+    String(timeSeconds),
+    "-i",
+    inputPath,
+    "-frames:v",
+    "1",
+    "-f",
+    "image2",
+    "-vcodec",
+    "ppm",
+    "-y",
+    outputPath,
+  ]);
+  return readFile(outputPath);
+}
+
+function dominantColorCount(frame: ReturnType<typeof parsePpm>, color: "red" | "blue"): number {
+  let count = 0;
+  for (let y = 0; y < Math.min(300, frame.height); y += 1) {
+    for (let x = Math.floor(frame.width * 0.7); x < frame.width; x += 1) {
+      const offset = (y * frame.width + x) * 3;
+      const red = frame.pixels[offset] ?? 0;
+      const blue = frame.pixels[offset + 2] ?? 0;
+      if (color === "red" ? red > blue + 60 : blue > red + 60) count += 1;
+    }
+  }
+  return count;
 }
 
 async function fixture(
@@ -66,6 +154,8 @@ async function fixture(
     observedPointer?: boolean;
     plannedTelemetry?: boolean;
     ownerToken?: string;
+    thinRightScrollbar?: boolean;
+    frameIntervalUs?: number;
   } = {},
 ): Promise<{ artifactRoot: string; sessionId: string; sessionRoot: string }> {
   const artifactRoot = await mkdtemp(join(tmpdir(), "recordly-sealed-render-"));
@@ -76,8 +166,15 @@ async function fixture(
   await mkdir(frameRoot, { recursive: true, mode: 0o700 });
   const beforePath = join(frameRoot, "fixture-before.jpg");
   const afterPath = join(frameRoot, "fixture-after.jpg");
-  await makeFrame(beforePath, "black");
-  await makeFrame(afterPath, options.noVisibleResult ? "black" : "white");
+  const frameDimensions = options.thinRightScrollbar ? "947x900" : "320x180";
+  await makeFrame(beforePath, "black", {
+    dimensions: frameDimensions,
+    ...(options.thinRightScrollbar ? { thinRightScrollbar: true } : {}),
+  });
+  await makeFrame(afterPath, options.noVisibleResult ? "black" : "white", {
+    dimensions: frameDimensions,
+    ...(options.thinRightScrollbar ? { thinRightScrollbar: true } : {}),
+  });
   const frameCount = 24;
   for (let index = 0; index < frameCount; index += 1) {
     await copyFile(
@@ -143,9 +240,11 @@ async function fixture(
         frameId,
         imagePath,
         sha256: options.corruptHash && index === 1 ? "0".repeat(64) : digest,
-        width: 320,
-        height: 180,
-        ...(options.timing === "legacy" ? {} : { receiptOffsetUs: index * 33_333 }),
+        width: options.thinRightScrollbar ? 947 : 320,
+        height: options.thinRightScrollbar ? 900 : 180,
+        ...(options.timing === "legacy"
+          ? {}
+          : { receiptOffsetUs: index * (options.frameIntervalUs ?? 33_333) }),
       }),
     );
   }
@@ -215,6 +314,80 @@ afterEach(async () => {
 });
 
 describe("sealed session renderer", () => {
+  it("recomputes owner-bound editorial proposals from sealed evidence before one automated zoom revision", async () => {
+    const ownerToken = "44444444-4444-4444-8444-444444444444";
+    const source = await fixture({ ownerToken, frameIntervalUs: 50_000 });
+    const helperRoot = join(source.artifactRoot, "browser-helpers", source.sessionId);
+    await mkdir(helperRoot, { recursive: true, mode: 0o700 });
+    await Promise.all([
+      writeFile(join(source.sessionRoot, "capture-config.json"), "{}\n", { mode: 0o600 }),
+      writeFile(join(helperRoot, "browser-start.mjs"), "export {};\n", { mode: 0o600 }),
+      writeFile(join(helperRoot, "browser-stop.mjs"), "export {};\n", { mode: 0o600 }),
+      writeFile(join(source.artifactRoot, ".recordly-codex-owner-token"), `${ownerToken}\n`, {
+        mode: 0o600,
+      }),
+    ]);
+    await renderSealedSession(source);
+    const manifest = JSON.parse(
+      await readFile(join(source.sessionRoot, "artifacts", "recording-manifest.json"), "utf8"),
+    ) as { timeline: { slots: Array<{ sourceFrameId: number }> } };
+    expect(manifest.timeline.slots.length).toBeGreaterThan(24);
+    expect(new Set(manifest.timeline.slots.map((slot) => slot.sourceFrameId)).size).toBeLessThan(
+      manifest.timeline.slots.length,
+    );
+    const service = createSessionStoreService({ artifactRoot: source.artifactRoot });
+    if (
+      service.createProject === undefined ||
+      service.reviseProject === undefined ||
+      service.proposeEditorial === undefined ||
+      service.applyAcceptedEditorialProposal === undefined
+    ) {
+      throw new Error("editorial service is unavailable");
+    }
+    const created = await service.createProject({
+      sessionId: source.sessionId,
+      projectId: "editorial-service-flow",
+    });
+    const v2 = await service.reviseProject({
+      mode: "manual",
+      project: { ...created.project, revision: 1 },
+    });
+    if (v2.project.schemaVersion !== 2) throw new Error("project did not migrate to V2");
+    const proposal = await service.proposeEditorial({
+      projectId: v2.project.projectId,
+      projectRevision: v2.project.revision,
+    });
+    const repeated = await service.proposeEditorial({
+      projectId: v2.project.projectId,
+      projectRevision: v2.project.revision,
+    });
+    const accepted = proposal.zoomProposals[0];
+    if (accepted === undefined) throw new Error("sealed evidence produced no zoom proposal");
+    expect(repeated).toEqual(proposal);
+    expect(JSON.stringify(proposal)).not.toContain(source.artifactRoot);
+    expect(JSON.stringify(proposal)).not.toContain("frames/raw");
+    expect(proposal.reviewTrimProposals.every((item) => item.action === "review-trim")).toBe(true);
+    await expect(
+      service.applyAcceptedEditorialProposal({
+        projectId: v2.project.projectId,
+        projectRevision: v2.project.revision,
+        proposalSha256: "0".repeat(64),
+        acceptedZoomProposalIds: [accepted.id],
+      }),
+    ).rejects.toThrow();
+    const applied = await service.applyAcceptedEditorialProposal({
+      projectId: v2.project.projectId,
+      projectRevision: v2.project.revision,
+      proposalSha256: proposal.proposalSha256,
+      acceptedZoomProposalIds: [accepted.id],
+    });
+    expect(applied.project).toMatchObject({
+      revision: 2,
+      revisionPolicy: { automatedRevisionCount: 1 },
+      zoomProposals: [expect.objectContaining({ id: accepted.id })],
+    });
+  }, 60_000);
+
   it("accepts trusted pointer telemetry and exposes only presentation-safe cursor samples", async () => {
     const source = await fixture({ observedPointer: true });
 
@@ -303,6 +476,26 @@ describe("sealed session renderer", () => {
       (await lstat(join(source.sessionRoot, "artifacts", "qa", "opening.ppm"))).mode & 0o777,
     ).toBe(0o600);
   }, 30_000);
+
+  it("accepts a resampled thin right-edge scrollbar without masking clipping", async () => {
+    const source = await fixture({ thinRightScrollbar: true });
+
+    const rendered = await renderSealedSession(source);
+    const quality = JSON.parse(await readFile(rendered.qualityReportPath, "utf8"));
+
+    expect(rendered.approved).toBe(true);
+    expect(quality.clipping).toMatchObject({
+      status: "pass",
+      expectedContentRect: { x: 444, y: 50, width: 1032, height: 980 },
+      samples: expect.arrayContaining([
+        expect.objectContaining({
+          frameIndex: 0,
+          edgesPresent: true,
+          maxEdgeColorDelta: expect.any(Number),
+        }),
+      ]),
+    });
+  }, 60_000);
 
   it("renders missing legacy timestamps only as a non-approved candidate", async () => {
     const source = await fixture({ timing: "legacy" });
@@ -442,7 +635,7 @@ describe("sealed session renderer", () => {
   it("renders a real editable project through preview, revision, and final without recapturing", async () => {
     const ownerToken = "11111111-1111-4111-8111-111111111111";
     const source = await fixture({ ownerToken, observedPointer: true });
-    const helperRoot = join(process.cwd(), ".playwright-mcp", "recordly-codex", source.sessionId);
+    const helperRoot = join(source.artifactRoot, "browser-helpers", source.sessionId);
     await mkdir(helperRoot, { recursive: true, mode: 0o700 });
     await Promise.all([
       writeFile(join(source.sessionRoot, "capture-config.json"), "{}\n", { mode: 0o600 }),
@@ -457,8 +650,10 @@ describe("sealed session renderer", () => {
       const service = createSessionStoreService({ artifactRoot: source.artifactRoot });
       if (
         service.createProject === undefined ||
+        service.inspectProject === undefined ||
         service.reviseProject === undefined ||
-        service.renderProject === undefined
+        service.renderProject === undefined ||
+        service.judgePreview === undefined
       ) {
         throw new Error("project rendering service is unavailable");
       }
@@ -511,6 +706,12 @@ describe("sealed session renderer", () => {
         kind: "preview",
       });
       expect(preview.render).toMatchObject({ kind: "preview", format: "mp4" });
+      const legacyFinal = await service.renderProject({
+        projectId: secondProject.project.projectId,
+        revision: secondProject.project.revision,
+        kind: "final",
+      });
+      expect(legacyFinal.render).toMatchObject({ kind: "final", format: "mp4" });
       await expect(
         service.renderProject({
           projectId: secondProject.project.projectId,
@@ -518,10 +719,86 @@ describe("sealed session renderer", () => {
           kind: "preview",
         }),
       ).rejects.toThrow();
+      const judgmentProject = await service.createProject({
+        sessionId: source.sessionId,
+        projectId: "service-flow-judgment",
+      });
+      const judgmentPreview = await service.renderProject({
+        projectId: judgmentProject.project.projectId,
+        revision: judgmentProject.project.revision,
+        kind: "preview",
+      });
+      await expect(
+        service.judgePreview({
+          projectId: judgmentProject.project.projectId,
+          revision: judgmentProject.project.revision,
+          projectSha256: judgmentPreview.projectSha256,
+          previewArtifactSha256: "0".repeat(64),
+          verdict: "revise",
+          issues: [],
+        }),
+      ).rejects.toThrow(/unavailable/i);
+      await service.judgePreview({
+        projectId: judgmentProject.project.projectId,
+        revision: judgmentProject.project.revision,
+        projectSha256: judgmentPreview.projectSha256,
+        previewArtifactSha256: judgmentPreview.render?.sha256 ?? "",
+        verdict: "revise",
+        issues: [
+          {
+            code: "framing",
+            severity: "major",
+            region: "presentation",
+            startUs: 0,
+            endUs: 1,
+            evidence: "The framing needs adjustment.",
+          },
+        ],
+      });
+      await expect(
+        service.renderProject({
+          projectId: judgmentProject.project.projectId,
+          revision: judgmentProject.project.revision,
+          kind: "final",
+        }),
+      ).rejects.toThrow(/accepted|judgment/i);
+      const rejectedProject = await service.createProject({
+        sessionId: source.sessionId,
+        projectId: "service-flow-rejected",
+      });
+      const rejectedPreview = await service.renderProject({
+        projectId: rejectedProject.project.projectId,
+        revision: rejectedProject.project.revision,
+        kind: "preview",
+      });
+      await service.judgePreview({
+        projectId: rejectedProject.project.projectId,
+        revision: rejectedProject.project.revision,
+        projectSha256: rejectedPreview.projectSha256,
+        previewArtifactSha256: rejectedPreview.render?.sha256 ?? "",
+        verdict: "reject",
+        issues: [
+          {
+            code: "unusable",
+            severity: "blocking",
+            region: "output",
+            startUs: 0,
+            endUs: 1,
+            evidence: "The preview cannot be approved.",
+          },
+        ],
+      });
+      await expect(
+        service.renderProject({
+          projectId: rejectedProject.project.projectId,
+          revision: rejectedProject.project.revision,
+          kind: "final",
+        }),
+      ).rejects.toThrow(/accepted|judgment/i);
       const revised = await service.reviseProject({
         mode: "manual",
         project: {
-          ...preview.project,
+          ...judgmentPreview.project,
           revision: 1,
           output: { ...preview.project.output, format: "gif" },
           presentation: {
@@ -530,19 +807,38 @@ describe("sealed session renderer", () => {
           },
         },
       });
-      const secondPreview = await service.renderProject({
+      const acceptedPreview = await service.renderProject({
         projectId: revised.project.projectId,
         revision: revised.project.revision,
         kind: "preview",
       });
-      const final = await service.renderProject({
+      const judgment = await service.judgePreview({
         projectId: revised.project.projectId,
         revision: revised.project.revision,
-        kind: "final",
+        projectSha256: acceptedPreview.projectSha256,
+        previewArtifactSha256: acceptedPreview.render?.sha256 ?? "",
+        verdict: "accept",
+        issues: [],
       });
-      for (const result of [preview, secondPreview, final]) {
+      expect(judgment.previewJudgment).toMatchObject({
+        status: "current",
+        verdict: "accept",
+        remainingAutomatedRevisionBudget: 4,
+      });
+      const previewPath = join(source.artifactRoot, acceptedPreview.render?.artifact ?? "");
+      await writeFile(previewPath, "tampered-preview\n", { mode: 0o600 });
+      const stale = await service.inspectProject({ projectId: revised.project.projectId });
+      expect(stale.previewJudgment).toMatchObject({ status: "stale", verdict: "accept" });
+      await expect(
+        service.renderProject({
+          projectId: revised.project.projectId,
+          revision: revised.project.revision,
+          kind: "final",
+        }),
+      ).rejects.toThrow(/accepted|judgment/i);
+      for (const result of [preview, legacyFinal, judgmentPreview]) {
         expect(result.render?.artifact).toMatch(
-          /^projects\/renders\/service-flow-second-r\d+-(preview|final)\.(mp4|gif)$/u,
+          /^projects\/renders\/service-flow(?:-second|-judgment)-r\d+-(preview|final)\.(mp4|gif)$/u,
         );
         expect(result.render?.sha256).toMatch(/^[a-f0-9]{64}$/u);
         const path = join(source.artifactRoot, result.render?.artifact ?? "");
@@ -562,8 +858,7 @@ describe("sealed session renderer", () => {
         ]);
       }
       expect(preview.render?.format).toBe("mp4");
-      expect(secondPreview.render?.format).toBe("gif");
-      expect(final.render?.format).toBe("gif");
+      expect(acceptedPreview.render?.format).toBe("gif");
       expect(await readFile(join(source.sessionRoot, "capture-events.jsonl"))).toEqual(
         captureBefore,
       );
@@ -573,5 +868,354 @@ describe("sealed session renderer", () => {
     } finally {
       await rm(helperRoot, { recursive: true, force: true });
     }
+  }, 180_000);
+
+  it("imports decoded V2 visual media and publishes it only after its private handle disposes cleanly", async () => {
+    const ownerToken = "22222222-2222-4222-8222-222222222222";
+    const source = await fixture({ ownerToken });
+    const helperRoot = join(source.artifactRoot, "browser-helpers", source.sessionId);
+    const authorizedRoot = join(source.artifactRoot, "authorized-media");
+    const visualPath = join(authorizedRoot, "temporal.mp4");
+    const replacementPath = join(authorizedRoot, "replacement.mp4");
+    await mkdir(helperRoot, { recursive: true, mode: 0o700 });
+    await mkdir(authorizedRoot, { recursive: true, mode: 0o700 });
+    await Promise.all([
+      writeFile(join(source.sessionRoot, "capture-config.json"), "{}\n", { mode: 0o600 }),
+      writeFile(join(helperRoot, "browser-start.mjs"), "export {};\n", { mode: 0o600 }),
+      writeFile(join(helperRoot, "browser-stop.mjs"), "export {};\n", { mode: 0o600 }),
+      writeFile(join(source.artifactRoot, ".recordly-codex-owner-token"), `${ownerToken}\n`, {
+        mode: 0o600,
+      }),
+    ]);
+    await makeTemporalVisual(visualPath, "red", "blue");
+    await makeTemporalVisual(replacementPath, "green", "yellow");
+    try {
+      await renderSealedSession(source);
+      const service = createSessionStoreService({
+        artifactRoot: source.artifactRoot,
+        authorizedImportRoot: authorizedRoot,
+      });
+      if (
+        service.createProject === undefined ||
+        service.reviseProject === undefined ||
+        service.inspectProject === undefined ||
+        service.renderProject === undefined ||
+        service.importProjectMedia === undefined
+      ) {
+        throw new Error("project media service is unavailable");
+      }
+      const created = await service.createProject({
+        sessionId: source.sessionId,
+        projectId: "temporal-visual",
+      });
+      const imported = await service.importProjectMedia({
+        projectId: created.project.projectId,
+        revision: created.project.revision,
+        fileName: "temporal.mp4",
+      });
+      expect(imported).toMatchObject({
+        mediaId: expect.stringMatching(/^media_[a-f0-9]{32}$/u),
+        kind: "video",
+        extension: "mp4",
+        width: 64,
+        height: 32,
+        fps: 30,
+      });
+      if (imported.kind !== "video" || imported.fps === undefined) {
+        throw new Error("imported visual media was not a decoded video");
+      }
+      expect(JSON.stringify(imported)).not.toContain(authorizedRoot);
+      const migrated = await service.reviseProject({
+        mode: "manual",
+        project: { ...created.project, revision: created.project.revision + 1 },
+      });
+      if (migrated.project.schemaVersion !== 2) throw new Error("project did not migrate to V2");
+      const clip = migrated.project.timeline.clips[0];
+      if (clip === undefined) throw new Error("fixture project has no clip");
+      const withVisual = await service.reviseProject({
+        mode: "manual",
+        project: {
+          ...migrated.project,
+          revision: migrated.project.revision + 1,
+          media: {
+            assets: [
+              ...migrated.project.media.assets,
+              {
+                id: imported.mediaId,
+                sha256: imported.sha256,
+                kind: "video",
+                provenance: "explicit-local-import",
+                durationUs: imported.durationUs,
+                width: imported.width,
+                height: imported.height,
+                fps: imported.fps,
+              },
+            ],
+          },
+          visualTracks: [
+            {
+              id: "temporal-pip",
+              mediaId: imported.mediaId,
+              clipId: clip.id,
+              timeDomain: "clip-source-relative",
+              startUs: 100_000,
+              endUs: 700_000,
+              mediaTrim: { startUs: 0, endUs: 600_000 },
+              sync: "source-time",
+              layout: {
+                position: "top-right",
+                scale: 0.2,
+                fit: "contain",
+                crop: "none",
+                opacity: 1,
+                radiusPx: 0,
+                border: "none",
+              },
+              motion: { preset: "none", durationUs: 0 },
+            },
+          ],
+        },
+      });
+      const preview = await service.renderProject({
+        projectId: withVisual.project.projectId,
+        revision: withVisual.project.revision,
+        kind: "preview",
+      });
+      const previewPath = join(source.artifactRoot, preview.render?.artifact ?? "");
+      const redFrame = parsePpm(
+        await decodePpm(previewPath, 0.25, join(source.artifactRoot, "temporal-red.ppm")),
+      );
+      const blueFrame = parsePpm(
+        await decodePpm(previewPath, 0.55, join(source.artifactRoot, "temporal-blue.ppm")),
+      );
+      expect(dominantColorCount(redFrame, "red")).toBeGreaterThan(3_000);
+      expect(dominantColorCount(blueFrame, "blue")).toBeGreaterThan(3_000);
+
+      const tampered = await service.reviseProject({
+        mode: "manual",
+        project: {
+          ...preview.project,
+          revision: preview.project.revision + 1,
+          preview: { status: "not-requested" },
+        },
+      });
+      const objectPath = join(
+        source.artifactRoot,
+        "private-media-library",
+        "objects",
+        imported.sha256,
+      );
+      const pending = service.renderProject({
+        projectId: tampered.project.projectId,
+        revision: tampered.project.revision,
+        kind: "preview",
+      });
+      await new Promise<void>((resolveWait) => setTimeout(resolveWait, 100));
+      await writeFile(objectPath, await readFile(replacementPath), { mode: 0o600 });
+      await expect(pending).rejects.toThrow(/media|dispose|integrity|reference/i);
+      const failedArtifact = join(
+        source.artifactRoot,
+        "projects",
+        "renders",
+        `${tampered.project.projectId}-r${tampered.project.revision}-preview.mp4`,
+      );
+      await expect(lstat(failedArtifact)).rejects.toMatchObject({ code: "ENOENT" });
+      await expect(
+        service.inspectProject({ projectId: tampered.project.projectId }),
+      ).resolves.toMatchObject({
+        project: { revision: tampered.project.revision, preview: tampered.project.preview },
+      });
+    } finally {
+      await rm(helperRoot, { recursive: true, force: true });
+    }
+  }, 120_000);
+
+  it("imports normalized private audio, revises V2, and renders decodable project audio", async () => {
+    const ownerToken = "33333333-3333-4333-8333-333333333333";
+    const source = await fixture({ ownerToken });
+    const helperRoot = join(source.artifactRoot, "browser-helpers", source.sessionId);
+    const authorizedRoot = join(source.artifactRoot, "authorized-audio");
+    await mkdir(helperRoot, { recursive: true, mode: 0o700 });
+    await mkdir(authorizedRoot, { recursive: true, mode: 0o700 });
+    await Promise.all([
+      writeFile(join(source.sessionRoot, "capture-config.json"), "{}\n", { mode: 0o600 }),
+      writeFile(join(helperRoot, "browser-start.mjs"), "export {};\n", { mode: 0o600 }),
+      writeFile(join(helperRoot, "browser-stop.mjs"), "export {};\n", { mode: 0o600 }),
+      writeFile(join(source.artifactRoot, ".recordly-codex-owner-token"), `${ownerToken}\n`, {
+        mode: 0o600,
+      }),
+    ]);
+    await Promise.all(
+      ["tone.wav", "tone.mp3", "tone.m4a"].map((fileName) =>
+        makeImportAudio(join(authorizedRoot, fileName)),
+      ),
+    );
+    await renderSealedSession(source);
+    const service = createSessionStoreService({
+      artifactRoot: source.artifactRoot,
+      authorizedImportRoot: authorizedRoot,
+    });
+    if (
+      service.createProject === undefined ||
+      service.reviseProject === undefined ||
+      service.inspectProject === undefined ||
+      service.renderProject === undefined ||
+      service.importProjectMedia === undefined
+    ) {
+      throw new Error("audio import service is unavailable");
+    }
+    const importProjectMedia = service.importProjectMedia;
+    const created = await service.createProject({
+      sessionId: source.sessionId,
+      projectId: "audio-e2e",
+    });
+    const imported = await service.importProjectMedia({
+      projectId: created.project.projectId,
+      revision: 0,
+      fileName: "tone.wav",
+    });
+    const repeated = await service.importProjectMedia({
+      projectId: created.project.projectId,
+      revision: 0,
+      fileName: "tone.wav",
+    });
+    const alternateFormats = await Promise.all(
+      ["tone.mp3", "tone.m4a"].map((fileName) =>
+        importProjectMedia({
+          projectId: created.project.projectId,
+          revision: 0,
+          fileName,
+        }),
+      ),
+    );
+    expect(repeated).toEqual(imported);
+    for (const normalized of alternateFormats) {
+      expect(normalized).toMatchObject({
+        mediaId: expect.stringMatching(/^audio_[a-f0-9]{32}$/u),
+        kind: "audio",
+        extension: "wav",
+        sampleRate: 48_000,
+        channels: 2,
+      });
+      expect(JSON.stringify(normalized)).not.toContain(authorizedRoot);
+    }
+    expect(imported).toMatchObject({
+      mediaId: expect.stringMatching(/^audio_[a-f0-9]{32}$/u),
+      kind: "audio",
+      extension: "wav",
+      sampleRate: 48_000,
+      channels: 2,
+    });
+    expect(JSON.stringify(imported)).not.toContain(authorizedRoot);
+    await expect(
+      service.importProjectMedia({
+        projectId: created.project.projectId,
+        revision: 1,
+        fileName: "tone.wav",
+      }),
+    ).rejects.toThrow();
+    await expect(lstat(join(source.artifactRoot, "projects", "renders"))).rejects.toMatchObject({
+      code: "ENOENT",
+    });
+    const migrated = await service.reviseProject({
+      mode: "manual",
+      project: { ...created.project, revision: 1 },
+    });
+    if (migrated.project.schemaVersion !== 2 || imported.kind !== "audio")
+      throw new Error("audio project did not migrate");
+    const withAudio = await service.reviseProject({
+      mode: "manual",
+      project: {
+        ...migrated.project,
+        revision: 2,
+        media: {
+          assets: [
+            ...migrated.project.media.assets,
+            {
+              id: imported.mediaId,
+              sha256: imported.sha256,
+              kind: "audio",
+              provenance: "explicit-local-import",
+              durationUs: imported.durationUs,
+            },
+          ],
+        },
+        audioTracks: [
+          {
+            id: "tone-track",
+            asset: { assetId: imported.mediaId, sha256: imported.sha256 },
+            timeDomain: "project-output-relative",
+            startUs: 0,
+            trim: { startUs: 0, endUs: Math.min(imported.durationUs, 300_000) },
+            gainDb: -3,
+          },
+        ],
+        audioMix: {
+          tracks: [
+            {
+              trackId: "tone-track",
+              mediaId: imported.mediaId,
+              role: "primary",
+              pan: 0,
+              fadeInUs: 0,
+              fadeOutUs: 0,
+              ducking: "none",
+            },
+          ],
+        },
+      },
+    });
+    const preview = await service.renderProject({
+      projectId: "audio-e2e",
+      revision: 2,
+      kind: "preview",
+    });
+    const previewPath = join(source.artifactRoot, preview.render?.artifact ?? "");
+    const probe = await execFileAsync(await resolveMediaExecutable("ffprobe"), [
+      "-v",
+      "error",
+      "-select_streams",
+      "a:0",
+      "-show_entries",
+      "stream=sample_rate,channels",
+      "-of",
+      "csv=p=0",
+      previewPath,
+    ]);
+    expect(probe.stdout.trim()).toBe("48000,2");
+    expect(withAudio.project.revision).toBe(2);
+    const tamperedRevision = await service.reviseProject({
+      mode: "manual",
+      project: {
+        ...preview.project,
+        revision: 3,
+        preview: { status: "not-requested" },
+      },
+    });
+    await writeFile(
+      join(source.artifactRoot, "project-assets", `${imported.mediaId}.wav`),
+      Buffer.from("tampered normalized audio"),
+      { mode: 0o600 },
+    );
+    await expect(
+      service.renderProject({
+        projectId: "audio-e2e",
+        revision: tamperedRevision.project.revision,
+        kind: "preview",
+      }),
+    ).rejects.toThrow(/asset|digest|media/i);
+    await expect(
+      lstat(
+        join(
+          source.artifactRoot,
+          "projects",
+          "renders",
+          `audio-e2e-r${tamperedRevision.project.revision}-preview.mp4`,
+        ),
+      ),
+    ).rejects.toMatchObject({ code: "ENOENT" });
+    await expect(service.inspectProject({ projectId: "audio-e2e" })).resolves.toMatchObject({
+      project: { revision: 3, preview: { status: "stale" } },
+    });
   }, 120_000);
 });

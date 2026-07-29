@@ -22,6 +22,15 @@ assertEqual(manifest.output?.height, 1080, "output.height");
 assertEqual(manifest.output?.fps, 30, "output.fps");
 assertEqual(manifest.output?.frameCount, 30, "output.frameCount");
 
+execFileSync(
+  process.execPath,
+  [resolve(repositoryRoot, "scripts/validate-output-parity-fixtures.mjs")],
+  {
+    cwd: repositoryRoot,
+    stdio: "inherit",
+  },
+);
+
 // This is intentionally an argument-array invocation: fixture validation never evaluates shell text.
 execFileSync(
   process.execPath,
@@ -29,6 +38,7 @@ execFileSync(
     resolve(repositoryRoot, "node_modules/vitest/vitest.mjs"),
     "run",
     "test/integration/render-fixture.test.ts",
+    "test/integration/output-parity-render.test.ts",
   ],
   { cwd: repositoryRoot, stdio: "inherit" },
 );

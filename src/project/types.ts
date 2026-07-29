@@ -22,7 +22,7 @@ export type AuthoredProjectText = {
   exportDisposition: "allow" | "redact";
 };
 
-export type RecordingProject = {
+export type RecordingProjectV1 = {
   schemaVersion: 1;
   projectId: string;
   revision: number;
@@ -126,6 +126,104 @@ export type RecordingProject = {
     | { status: "not-requested" }
     | { status: "ready" | "stale" | "rendered"; revision: number };
 };
+
+export type ProjectMediaAsset =
+  | {
+      id: string;
+      sha256: string;
+      kind: "audio" | "image";
+      provenance: "legacy-declared" | "explicit-local-import";
+      durationUs: number;
+    }
+  | {
+      id: string;
+      sha256: string;
+      kind: "video";
+      provenance: "explicit-local-import";
+      durationUs: number;
+      width: number;
+      height: number;
+      fps: number;
+    };
+
+/**
+ * V2 retains V1's executable fields until the renderer consumes the new media
+ * contract. The extra fields are declarative, path-free, and strict so a
+ * later renderer can add support without a second persistence migration.
+ */
+export type RecordingProjectV2 = Omit<RecordingProjectV1, "schemaVersion"> & {
+  schemaVersion: 2;
+  profile: import("./recording-profile.js").RecordingProfileReference;
+  media: { assets: ProjectMediaAsset[] };
+  visualTracks: Array<{
+    id: string;
+    mediaId: string;
+    clipId: string;
+    timeDomain: "clip-source-relative";
+    startUs: number;
+    endUs: number;
+    mediaTrim: { startUs: number; endUs: number };
+    sync: "source-time" | "output-time";
+    layout: {
+      position: "top-left" | "top-right" | "bottom-left" | "bottom-right";
+      scale: number;
+      fit: "contain" | "cover";
+      crop: "none" | { x: number; y: number; width: number; height: number };
+      opacity: number;
+      radiusPx: number;
+      border: "none" | "light" | "strong";
+    };
+    motion: { preset: "none" | "fade" | "pop"; durationUs: number };
+  }>;
+  timelineTransitions: Array<{
+    clipId: string;
+    family:
+      | "cut"
+      | "crossfade"
+      | "dip-to-color"
+      | "wipe-left"
+      | "wipe-right"
+      | "slide-left"
+      | "slide-right";
+    durationUs: number;
+    easing: "linear" | "ease-in-out" | "ease-out";
+    color?: string;
+  }>;
+  zoomProposals: Array<{
+    id: string;
+    clipId: string;
+    sourceRange: { startUs: number; endUs: number };
+    focus: { x: number; y: number };
+    scale: number;
+    easing: "linear" | "ease-in-out" | "ease-out";
+    review: {
+      status: "proposed" | "accepted" | "rejected";
+      basis: "observed-input" | "manual";
+    };
+  }>;
+  presentationControls: {
+    cursor: { emphasis: "none" | "spotlight" | "trail"; trailDurationUs: number };
+    frame: { fit: "contain" | "cover"; border: "none" | "subtle" | "strong" };
+    export: {
+      audio: "include" | "mute";
+      colorRange: "limited";
+      metadata: "none" | "minimal";
+    };
+  };
+  audioMix: {
+    tracks: Array<{
+      trackId: string;
+      mediaId: string;
+      role: "primary" | "bed" | "effect";
+      pan: number;
+      fadeInUs: number;
+      fadeOutUs: number;
+      ducking: "none" | "against-primary";
+    }>;
+  };
+};
+
+export type RecordingProject = RecordingProjectV1 | RecordingProjectV2;
 
 /** Stable, path-free input a renderer may consume without access to capture storage. */
 export type ProjectRenderInput = Omit<RecordingProject, "schemaVersion" | "preview">;

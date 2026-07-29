@@ -4,10 +4,14 @@ import {
   assertProjectTextReadyForExport,
   ContractValidationError,
   canonicalRecordingProject,
+  MAX_CAPTURE_SOURCE_HEIGHT,
+  MAX_CAPTURE_SOURCE_WIDTH,
+  migrateV1RecordingProject,
   reviseRecordingProject,
   toProjectRenderInput,
   validateRecordingProject,
 } from "../../src/project/index.js";
+import { assertRasterSourceBounded } from "../../src/render/project-renderer.js";
 
 const project = {
   schemaVersion: 1,
@@ -255,6 +259,53 @@ describe("recording project contract", () => {
     ]) {
       expect(() => validateRecordingProject(value)).toThrow(ContractValidationError);
     }
+  });
+
+  it("accepts only capture geometry that the preview renderer can consume", () => {
+    const current = {
+      ...project,
+      captureSources: [
+        {
+          ...project.captureSources[0],
+          sourceWidth: MAX_CAPTURE_SOURCE_WIDTH,
+          sourceHeight: MAX_CAPTURE_SOURCE_HEIGHT,
+        },
+      ],
+    };
+    const revised = reviseRecordingProject(current, {
+      ...current,
+      revision: 1,
+      preview: { status: "not-requested" },
+    });
+    const capture = revised.captureSources[0];
+    if (capture === undefined) throw new Error("expected a capture source");
+
+    expect(() =>
+      assertRasterSourceBounded({
+        width: capture.sourceWidth,
+        height: capture.sourceHeight,
+      }),
+    ).not.toThrow();
+    expect(() =>
+      reviseRecordingProject(current, {
+        ...current,
+        revision: 1,
+        captureSources: [
+          { ...current.captureSources[0], sourceWidth: MAX_CAPTURE_SOURCE_WIDTH + 1 },
+        ],
+      }),
+    ).toThrow(ContractValidationError);
+  });
+
+  it("rejects legacy geometry that cannot be migrated into a preview-renderable V2 project", () => {
+    expect(() =>
+      migrateV1RecordingProject({
+        ...project,
+        captureSources: [
+          { ...project.captureSources[0], sourceHeight: MAX_CAPTURE_SOURCE_HEIGHT + 1 },
+        ],
+      }),
+    ).toThrow(ContractValidationError);
   });
 
   it("allows monotonic immutable revisions while separately bounding automated revisions", () => {

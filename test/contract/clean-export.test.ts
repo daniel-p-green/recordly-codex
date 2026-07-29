@@ -1,5 +1,5 @@
 import { spawn } from "node:child_process";
-import { copyFile, lstat, mkdir, mkdtemp, readdir, readFile, rm } from "node:fs/promises";
+import { chmod, copyFile, lstat, mkdir, mkdtemp, readdir, readFile, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { dirname, join, relative } from "node:path";
 
@@ -155,12 +155,16 @@ describe("clean marketplace export", () => {
     const serverPath = mcp.mcpServers?.["recordly-codex"]?.args?.[0];
     if (serverPath === undefined) throw new Error("clean export MCP server path is missing");
 
+    await chmod(pluginRoot, 0o500);
     const transport = await rawMcp(pluginRoot, artifactRoot, serverPath);
     try {
-      await transport.call(1, "initialize", {
+      const initialized = await transport.call(1, "initialize", {
         protocolVersion: "2025-03-26",
         capabilities: {},
         clientInfo: { name: "clean-export-test", version: "0.1.0" },
+      });
+      expect(initialized.result).toMatchObject({
+        serverInfo: { name: "recordly-codex-mcp-server", version: "0.5.0" },
       });
       transport.notify("notifications/initialized", {});
       const listed = await transport.call(2, "tools/list", {});
@@ -168,16 +172,26 @@ describe("clean marketplace export", () => {
         .map((tool) => tool.name)
         .sort();
       expect(names).toEqual([
+        "apply_accepted_recording_project_editorial",
+        "apply_recording_profile",
+        "create_recording_profile",
         "create_recording_project",
         "create_recording_session",
         "discard_recording_session",
+        "get_recording_profile",
+        "import_recording_project_media",
         "inspect_recording_project",
+        "inspect_recording_project_preview",
         "inspect_recording_session",
+        "judge_recording_project_preview",
+        "list_recording_profiles",
+        "propose_recording_project_editorial",
         "record_browser_event",
         "render_recording_project_final",
         "render_recording_project_preview",
         "revise_recording_project",
         "seal_recording_capture",
+        "update_recording_profile",
       ]);
       const created = await transport.call(3, "tools/call", {
         name: "create_recording_session",
@@ -197,12 +211,14 @@ describe("clean marketplace export", () => {
       expect(discarded.result).toMatchObject({
         structuredContent: { ok: true, session: { status: "discarded" } },
       });
+      expect(await files(pluginRoot)).toEqual([...packageFiles].sort());
       expect(transport.stderr()).toBe("");
       expect(transport.stdoutLines().map((line) => JSON.parse(line))).toEqual(
         expect.arrayContaining([expect.objectContaining({ jsonrpc: "2.0", id: 1 })]),
       );
     } finally {
       transport.close();
+      await chmod(pluginRoot, 0o700);
     }
   }, 30_000);
 });

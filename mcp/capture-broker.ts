@@ -20,6 +20,14 @@ const SCROLL_COALESCE_US = 16_667;
 const POINTER_COALESCE_US = 33_333;
 const MAX_COORDINATE = 1_000_000;
 const MAX_POINTER_BUTTONS = 31;
+export const DEFAULT_CAPTURE_BUDGET = {
+  maxCaptureSeconds: 120,
+  maxAcceptedFrames: 3_600,
+  maxAcceptedBytes: 256 * 1024 * 1024,
+} as const;
+const MAX_CAPTURE_SECONDS = 300;
+const MAX_ACCEPTED_FRAMES = 9_000;
+const MAX_ACCEPTED_BYTES = 512 * 1024 * 1024;
 
 type CaptureCounts = {
   receivedFrames: number;
@@ -35,7 +43,13 @@ type BrokerInput = {
   origin: string;
   /** Local monotonic microseconds, injectable only to make receipt-order evidence deterministic in tests. */
   clockUs?: () => number;
-  onPhase: (phase: "ready" | "claimed" | "running" | "stopped" | "failed") => Promise<void>;
+  maxCaptureSeconds?: number;
+  maxAcceptedFrames?: number;
+  maxAcceptedBytes?: number;
+  onPhase: (
+    phase: "ready" | "claimed" | "running" | "stopped" | "failed",
+    status: CaptureBrokerStatus,
+  ) => Promise<void>;
 };
 
 type ObservedClick = {
@@ -73,8 +87,27 @@ export type BrokerObservedEvent = {
 
 export type CaptureBroker = {
   endpoint: string;
+  status(): CaptureBrokerStatus;
   close(): Promise<void>;
 };
+
+export type CaptureBrokerStatus = {
+  phase: "ready" | "claimed" | "running" | "stopped" | "failed";
+  maxCaptureSeconds: number;
+  maxAcceptedFrames: number;
+  maxAcceptedBytes: number;
+  acceptedFrames: number;
+  acceptedBytes: number;
+  reason?: "budget_exceeded";
+};
+
+function boundedBudget(value: number | undefined, fallback: number, maximum: number): number {
+  const resolved = value ?? fallback;
+  if (!Number.isSafeInteger(resolved) || resolved < 1 || resolved > maximum) {
+    throw new RangeError("capture budget is invalid");
+  }
+  return resolved;
+}
 
 function json(response: ServerResponse, status: number, body: Record<string, unknown>): void {
   response.writeHead(status, { "content-type": "application/json", "cache-control": "no-store" });
@@ -235,6 +268,23 @@ export async function createCaptureBroker(input: BrokerInput): Promise<CaptureBr
   await mkdir(join(input.root, "frames", "raw"), { recursive: true, mode: 0o700 });
   const observedEventsPath = await ensureObservedEventsFile(input.root);
   const clockUs = input.clockUs ?? (() => Number(process.hrtime.bigint() / 1_000n));
+  const budget = {
+    maxCaptureSeconds: boundedBudget(
+      input.maxCaptureSeconds,
+      DEFAULT_CAPTURE_BUDGET.maxCaptureSeconds,
+      MAX_CAPTURE_SECONDS,
+    ),
+    maxAcceptedFrames: boundedBudget(
+      input.maxAcceptedFrames,
+      DEFAULT_CAPTURE_BUDGET.maxAcceptedFrames,
+      MAX_ACCEPTED_FRAMES,
+    ),
+    maxAcceptedBytes: boundedBudget(
+      input.maxAcceptedBytes,
+      DEFAULT_CAPTURE_BUDGET.maxAcceptedBytes,
+      MAX_ACCEPTED_BYTES,
+    ),
+  };
   const receiptClockUs = (): number => {
     const value = clockUs();
     if (!Number.isSafeInteger(value) || value < 0) throw new Error("invalid_broker_clock");
@@ -244,7 +294,10 @@ export async function createCaptureBroker(input: BrokerInput): Promise<CaptureBr
   let capability: string | undefined;
   let pendingWrites = 0;
   let persistenceTail = Promise.resolve();
+  let frameProcessingTail = Promise.resolve();
   let frameId = 0;
+  let acceptedBytes = 0;
+  let captureStartedReceiptUs: number | undefined;
   let firstAcceptedReceiptUs: number | undefined;
   let hasDurableBaselineFrame = false;
   let lastReceiptOffsetUs = -1;
@@ -265,12 +318,28 @@ export async function createCaptureBroker(input: BrokerInput): Promise<CaptureBr
     rejectedFrames: 0,
     degradationRequested: false,
   };
+  const status = (): CaptureBrokerStatus => ({
+    phase,
+    ...budget,
+    acceptedFrames: observed.acceptedFrames,
+    acceptedBytes,
+    ...(failureReason === "budget_exceeded" ? { reason: failureReason } : {}),
+  });
   const setPhase = async (next: typeof phase, reason?: string): Promise<void> => {
     phase = next;
     failureReason = reason;
-    await input.onPhase(next);
+    await input.onPhase(next, status());
   };
   const captureFailed = (): boolean => phase === "failed";
+  const enterFrameProcessing = async (): Promise<() => void> => {
+    const previous = frameProcessingTail;
+    let release: (() => void) | undefined;
+    frameProcessingTail = new Promise<void>((resolveCurrent) => {
+      release = resolveCurrent;
+    });
+    await previous;
+    return () => release?.();
+  };
   const observedRateAllowed = (receiptAtUs: number): boolean => {
     const effectiveReceiptUs = Math.max(receiptAtUs, observedRateReceiptUs);
     observedRateReceiptUs = effectiveReceiptUs;
@@ -353,6 +422,12 @@ export async function createCaptureBroker(input: BrokerInput): Promise<CaptureBr
     await writeFile(temporary, `${JSON.stringify(summary)}\n`, { mode: 0o600, flag: "wx" });
     await rename(temporary, join(input.root, "capture-summary.json"));
   };
+  const failBudget = async (): Promise<void> => {
+    if (phase === "claimed" || phase === "running") {
+      await setPhase("failed", "budget_exceeded");
+    }
+    await writeSummary(observed);
+  };
   const server: Server = createServer(async (request, response) => {
     if (
       !isLoopback(request) ||
@@ -365,7 +440,12 @@ export async function createCaptureBroker(input: BrokerInput): Promise<CaptureBr
     const isObservedEvent = request.url === "/observed-event";
     const isObserverChallenge = request.url === "/observer-challenge";
     let receiptAtUs: number | undefined;
-    if (request.url === "/frame" || isObservedEvent) {
+    if (
+      request.url === "/claim" ||
+      request.url === "/frame" ||
+      request.url === "/stop" ||
+      isObservedEvent
+    ) {
       try {
         receiptAtUs = receiptClockUs();
       } catch {
@@ -457,6 +537,8 @@ export async function createCaptureBroker(input: BrokerInput): Promise<CaptureBr
     }
     if (request.url === "/claim") {
       if (phase !== "ready") return json(response, 409, { ok: false });
+      if (receiptAtUs === undefined) return json(response, 500, { ok: false });
+      captureStartedReceiptUs = receiptAtUs;
       capability = randomBytes(32).toString("hex");
       await setPhase("claimed");
       json(response, 200, { ok: true, token: capability });
@@ -553,98 +635,126 @@ export async function createCaptureBroker(input: BrokerInput): Promise<CaptureBr
       return;
     }
     if (request.url === "/frame") {
-      observed.receivedFrames += 1;
-      if ((phase !== "claimed" && phase !== "running") || pendingWrites >= QUEUE_CAPACITY) {
-        observed.rejectedFrames += 1;
-        if (phase === "claimed" || phase === "running") await setPhase("failed", "backpressure");
-        json(response, 429, { ok: false });
-        return;
-      }
-      const frame = object(payload["frame"]);
-      const encoded = frame?.["data"];
-      const cdpFrameId = positive(frame?.["sessionId"]);
-      const metadata = object(frame?.["metadata"]);
-      const width = positive(metadata?.["deviceWidth"]);
-      const height = positive(metadata?.["deviceHeight"]);
-      if (
-        typeof encoded !== "string" ||
-        encoded.length > 32 * 1024 * 1024 ||
-        cdpFrameId === undefined ||
-        width === undefined ||
-        height === undefined ||
-        !/^(?:[A-Za-z0-9+/]{4})*(?:[A-Za-z0-9+/]{2}==|[A-Za-z0-9+/]{3}=)?$/u.test(encoded)
-      ) {
-        observed.rejectedFrames += 1;
-        await setPhase("failed", "malformed_frame");
-        json(response, 400, { ok: false });
-        return;
-      }
-      pendingWrites += 1;
-      const receiptTimestampUs = receiptAtUs;
-      if (receiptTimestampUs === undefined) {
-        pendingWrites -= 1;
-        await setPhase("failed", "invalid_broker_clock");
-        json(response, 500, { ok: false });
-        return;
-      }
+      const releaseFrameProcessing = await enterFrameProcessing();
       try {
-        await flushPendingScroll();
-        await flushPendingPointer();
-      } catch {
-        pendingWrites -= 1;
-        if (!captureFailed()) await setPhase("failed", "observed_event_persist_failed");
-        json(response, 500, { ok: false });
-        return;
-      }
-      const persist = persistenceTail.then(async () => {
-        if (phase !== "claimed" && phase !== "running") {
-          throw new Error("capture_not_running");
+        observed.receivedFrames += 1;
+        if ((phase !== "claimed" && phase !== "running") || pendingWrites >= QUEUE_CAPACITY) {
+          observed.rejectedFrames += 1;
+          if (phase === "claimed" || phase === "running") await setPhase("failed", "backpressure");
+          json(response, 429, { ok: false });
+          return;
         }
-        frameId += 1;
-        const receiptOffsetUs =
-          firstAcceptedReceiptUs === undefined
-            ? 0
-            : Math.max(receiptTimestampUs - firstAcceptedReceiptUs, lastReceiptOffsetUs + 1);
-        if (firstAcceptedReceiptUs === undefined) firstAcceptedReceiptUs = receiptTimestampUs;
-        lastReceiptOffsetUs = receiptOffsetUs;
+        const frame = object(payload["frame"]);
+        const encoded = frame?.["data"];
+        const cdpFrameId = positive(frame?.["sessionId"]);
+        const metadata = object(frame?.["metadata"]);
+        const width = positive(metadata?.["deviceWidth"]);
+        const height = positive(metadata?.["deviceHeight"]);
+        if (
+          typeof encoded !== "string" ||
+          encoded.length > 32 * 1024 * 1024 ||
+          cdpFrameId === undefined ||
+          width === undefined ||
+          height === undefined ||
+          !/^(?:[A-Za-z0-9+/]{4})*(?:[A-Za-z0-9+/]{2}==|[A-Za-z0-9+/]{3}=)?$/u.test(encoded)
+        ) {
+          observed.rejectedFrames += 1;
+          await setPhase("failed", "malformed_frame");
+          json(response, 400, { ok: false });
+          return;
+        }
         const bytes = Buffer.from(encoded, "base64");
-        const imagePath = `frames/raw/frame-${String(frameId).padStart(6, "0")}.jpg`;
-        const destination = join(input.root, imagePath);
-        const temporary = `${destination}.${frameId}.tmp`;
-        await writeFile(temporary, bytes, { mode: 0o600, flag: "wx" });
-        await rename(temporary, destination);
-        await appendFile(
-          join(input.root, "capture-events.jsonl"),
-          `${JSON.stringify({ sessionId: input.sessionId, type: "frame", frameId, receiptOffsetUs, imagePath, sha256: createHash("sha256").update(bytes).digest("hex"), width, height })}\n`,
-          "utf8",
+        if (
+          observed.acceptedFrames >= budget.maxAcceptedFrames ||
+          acceptedBytes + bytes.byteLength > budget.maxAcceptedBytes ||
+          (captureStartedReceiptUs !== undefined &&
+            receiptAtUs !== undefined &&
+            receiptAtUs - captureStartedReceiptUs > budget.maxCaptureSeconds * 1_000_000)
+        ) {
+          observed.rejectedFrames += 1;
+          await failBudget();
+          json(response, 429, { ok: false });
+          return;
+        }
+        pendingWrites += 1;
+        const receiptTimestampUs = receiptAtUs;
+        if (receiptTimestampUs === undefined) {
+          pendingWrites -= 1;
+          await setPhase("failed", "invalid_broker_clock");
+          json(response, 500, { ok: false });
+          return;
+        }
+        try {
+          await flushPendingScroll();
+          await flushPendingPointer();
+        } catch {
+          pendingWrites -= 1;
+          if (!captureFailed()) await setPhase("failed", "observed_event_persist_failed");
+          json(response, 500, { ok: false });
+          return;
+        }
+        const persist = persistenceTail.then(async () => {
+          if (phase !== "claimed" && phase !== "running") {
+            throw new Error("capture_not_running");
+          }
+          frameId += 1;
+          const receiptOffsetUs =
+            firstAcceptedReceiptUs === undefined
+              ? 0
+              : Math.max(receiptTimestampUs - firstAcceptedReceiptUs, lastReceiptOffsetUs + 1);
+          if (firstAcceptedReceiptUs === undefined) firstAcceptedReceiptUs = receiptTimestampUs;
+          lastReceiptOffsetUs = receiptOffsetUs;
+          const imagePath = `frames/raw/frame-${String(frameId).padStart(6, "0")}.jpg`;
+          const destination = join(input.root, imagePath);
+          const temporary = `${destination}.${frameId}.tmp`;
+          await writeFile(temporary, bytes, { mode: 0o600, flag: "wx" });
+          await rename(temporary, destination);
+          await appendFile(
+            join(input.root, "capture-events.jsonl"),
+            `${JSON.stringify({ sessionId: input.sessionId, type: "frame", frameId, receiptOffsetUs, imagePath, sha256: createHash("sha256").update(bytes).digest("hex"), width, height })}\n`,
+            "utf8",
+          );
+          hasDurableBaselineFrame = true;
+          observed.acceptedFrames += 1;
+          acceptedBytes += bytes.byteLength;
+          if (phase === "claimed") await setPhase("running");
+          const degrade = pendingWrites / QUEUE_CAPACITY > DEGRADE_OCCUPANCY;
+          observed.degradationRequested ||= degrade;
+          return degrade;
+        });
+        const persisted = persist.catch(async (error: unknown) => {
+          if (phase !== "failed") await setPhase("failed", "durable_write_failed");
+          throw error;
+        });
+        persistenceTail = persisted.then(
+          () => undefined,
+          () => undefined,
         );
-        hasDurableBaselineFrame = true;
-        observed.acceptedFrames += 1;
-        if (phase === "claimed") await setPhase("running");
-        const degrade = pendingWrites / QUEUE_CAPACITY > DEGRADE_OCCUPANCY;
-        observed.degradationRequested ||= degrade;
-        return degrade;
-      });
-      const persisted = persist.catch(async (error: unknown) => {
-        if (phase !== "failed") await setPhase("failed", "durable_write_failed");
-        throw error;
-      });
-      persistenceTail = persisted.then(
-        () => undefined,
-        () => undefined,
-      );
-      try {
-        const degrade = await persisted;
-        json(response, 200, { ok: true, degrade });
-      } catch {
-        observed.rejectedFrames += 1;
-        json(response, 500, { ok: false });
+        try {
+          const degrade = await persisted;
+          json(response, 200, { ok: true, degrade });
+        } catch {
+          observed.rejectedFrames += 1;
+          json(response, 500, { ok: false });
+        } finally {
+          pendingWrites -= 1;
+        }
+        return;
       } finally {
-        pendingWrites -= 1;
+        releaseFrameProcessing();
       }
-      return;
     }
     if (request.url === "/stop") {
+      await frameProcessingTail;
+      if (
+        captureStartedReceiptUs !== undefined &&
+        receiptAtUs !== undefined &&
+        receiptAtUs - captureStartedReceiptUs > budget.maxCaptureSeconds * 1_000_000
+      ) {
+        await failBudget();
+        json(response, 429, { ok: false, status: phase });
+        return;
+      }
       const finalCounts = counts(payload);
       if (finalCounts === undefined || phase === "ready" || phase === "stopped") {
         json(response, 400, { ok: false });
@@ -695,6 +805,7 @@ export async function createCaptureBroker(input: BrokerInput): Promise<CaptureBr
     throw new Error("capture broker address unavailable");
   return {
     endpoint: `http://127.0.0.1:${address.port}`,
+    status,
     close: async () => {
       if (phase === "claimed" || phase === "running") {
         await setPhase("failed", "broker_interrupted");

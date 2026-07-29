@@ -40,6 +40,9 @@ jobs:
       - name: Install dependencies
         run: npm ci
 
+      - name: Verify release tag matches package version
+        run: node scripts/assert-release-version.mjs
+
       - name: Validate the release candidate
         run: >-
           bash scripts/ci/run-quality.sh &&

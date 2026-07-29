@@ -1,16 +1,26 @@
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { createRecordingToolHandlers } from "./handlers.js";
 import {
+  applyAcceptedEditorialProposalInputSchema,
+  applyRecordingProfileInputSchema,
+  createRecordingProfileInputSchema,
   createRecordingProjectInputSchema,
   createRecordingSessionInputSchema,
   discardRecordingSessionInputSchema,
+  getRecordingProfileInputSchema,
+  importRecordingProjectMediaInputSchema,
   inspectRecordingProjectInputSchema,
+  inspectRecordingProjectPreviewInputSchema,
   inspectRecordingSessionInputSchema,
+  judgeRecordingProjectPreviewInputSchema,
+  listRecordingProfilesInputSchema,
+  proposeRecordingProjectEditorialInputSchema,
   recordBrowserEventInputSchema,
   renderRecordingProjectInputSchema,
   reviseRecordingProjectInputSchema,
   sealRecordingCaptureInputSchema,
   toolOutputSchema,
+  updateRecordingProfileInputSchema,
 } from "./schemas.js";
 import type { RecordingMcpService } from "./types.js";
 
@@ -29,7 +39,7 @@ const mutationAnnotations = {
 } as const;
 
 export function createRecordingMcpServer(service: RecordingMcpService): McpServer {
-  const server = new McpServer({ name: "recordly-codex-mcp-server", version: "0.3.0" });
+  const server = new McpServer({ name: "recordly-codex-mcp-server", version: "0.5.0" });
   const handlers = createRecordingToolHandlers(service);
   server.registerTool(
     "create_recording_session",
@@ -113,6 +123,34 @@ export function createRecordingMcpServer(service: RecordingMcpService): McpServe
       },
       handlers.inspectRecordingProject,
     );
+    if (service.judgePreview !== undefined) {
+      server.registerTool(
+        "judge_recording_project_preview",
+        {
+          title: "Judge recording project preview",
+          description:
+            "Persist a bounded preview verdict for the current rendered project revision without editing it.",
+          inputSchema: judgeRecordingProjectPreviewInputSchema,
+          outputSchema: toolOutputSchema,
+          annotations: mutationAnnotations,
+        },
+        handlers.judgeRecordingProjectPreview,
+      );
+    }
+    if (service.inspectPreview !== undefined) {
+      server.registerTool(
+        "inspect_recording_project_preview",
+        {
+          title: "Inspect rendered project preview",
+          description:
+            "Decode the exact current private preview into bounded visual evidence and technical QA for judgment.",
+          inputSchema: inspectRecordingProjectPreviewInputSchema,
+          outputSchema: toolOutputSchema,
+          annotations: readOnlyAnnotations,
+        },
+        handlers.inspectRecordingProjectPreview,
+      );
+    }
     server.registerTool(
       "revise_recording_project",
       {
@@ -124,6 +162,113 @@ export function createRecordingMcpServer(service: RecordingMcpService): McpServe
         annotations: mutationAnnotations,
       },
       handlers.reviseRecordingProject,
+    );
+    server.registerTool(
+      "import_recording_project_media",
+      {
+        title: "Import private project media",
+        description:
+          "Import one image, video, or audio file from the runtime-configured authorized directory without exposing its path.",
+        inputSchema: importRecordingProjectMediaInputSchema,
+        outputSchema: toolOutputSchema,
+        annotations: mutationAnnotations,
+      },
+      handlers.importRecordingProjectMedia,
+    );
+    if (
+      service.proposeEditorial !== undefined &&
+      service.applyAcceptedEditorialProposal !== undefined
+    ) {
+      server.registerTool(
+        "propose_recording_project_editorial",
+        {
+          title: "Propose evidence-backed editorial zooms",
+          description:
+            "Analyze the exact V2 project revision from its sealed capture evidence and return a canonical review proposal.",
+          inputSchema: proposeRecordingProjectEditorialInputSchema,
+          outputSchema: toolOutputSchema,
+          annotations: readOnlyAnnotations,
+        },
+        handlers.proposeRecordingProjectEditorial,
+      );
+      server.registerTool(
+        "apply_accepted_recording_project_editorial",
+        {
+          title: "Apply accepted editorial zooms",
+          description:
+            "Apply accepted zoom proposal IDs from the exact current canonical proposal as one automated project revision.",
+          inputSchema: applyAcceptedEditorialProposalInputSchema,
+          outputSchema: toolOutputSchema,
+          annotations: mutationAnnotations,
+        },
+        handlers.applyAcceptedRecordingProjectEditorial,
+      );
+    }
+  }
+  if (
+    service.listProfiles !== undefined &&
+    service.getProfile !== undefined &&
+    service.createProfile !== undefined &&
+    service.updateProfile !== undefined &&
+    service.applyProfile !== undefined
+  ) {
+    server.registerTool(
+      "list_recording_profiles",
+      {
+        title: "List recording profiles",
+        description: "List the fixed built-ins and the caller-owned local profile summaries.",
+        inputSchema: listRecordingProfilesInputSchema,
+        outputSchema: toolOutputSchema,
+        annotations: readOnlyAnnotations,
+      },
+      handlers.listRecordingProfiles,
+    );
+    server.registerTool(
+      "get_recording_profile",
+      {
+        title: "Get recording profile",
+        description: "Load one canonical built-in or caller-owned local recording profile.",
+        inputSchema: getRecordingProfileInputSchema,
+        outputSchema: toolOutputSchema,
+        annotations: readOnlyAnnotations,
+      },
+      handlers.getRecordingProfile,
+    );
+    server.registerTool(
+      "create_recording_profile",
+      {
+        title: "Create recording profile",
+        description:
+          "Create one owner-local recording profile at revision 1 from a strict snapshot.",
+        inputSchema: createRecordingProfileInputSchema,
+        outputSchema: toolOutputSchema,
+        annotations: mutationAnnotations,
+      },
+      handlers.createRecordingProfile,
+    );
+    server.registerTool(
+      "update_recording_profile",
+      {
+        title: "Update recording profile",
+        description:
+          "Replace one owner-local recording profile with an exact revision and digest CAS.",
+        inputSchema: updateRecordingProfileInputSchema,
+        outputSchema: toolOutputSchema,
+        annotations: mutationAnnotations,
+      },
+      handlers.updateRecordingProfile,
+    );
+    server.registerTool(
+      "apply_recording_profile",
+      {
+        title: "Apply recording profile",
+        description:
+          "Apply one exact canonical profile to one exact current project as a single editorial revision.",
+        inputSchema: applyRecordingProfileInputSchema,
+        outputSchema: toolOutputSchema,
+        annotations: mutationAnnotations,
+      },
+      handlers.applyRecordingProfile,
     );
   }
   if (service.renderProject !== undefined && service.renderProjectEnabled === true) {

@@ -2,7 +2,7 @@
 
 ## Outcome
 
-Deliver a public, reproducible Codex plugin named `recordly-codex` and a first vertical-slice path for turning an approved website URL and objective into a quality-gated interactive recording. Codex Desktop Browser directs the workflow while local deterministic code owns capture, composition, encoding, and verification.
+Deliver and publicly release `recordly-codex` v0.5.0 as a reproducible Codex Desktop Browser plugin that turns an approved website URL and bounded objective into a professionally composed, evidence-backed recording without another visible recording app. Codex directs and judges the workflow while local deterministic code owns capture, media ingestion, composition, encoding, publication, and artifact verification.
 
 ## Constraints
 
@@ -41,6 +41,7 @@ Deliver a public, reproducible Codex plugin named `recordly-codex` and a first v
 4. Add visual and technical quality gates with one bounded retry path and a manifest-backed final report. **Complete for the v0.2.0 scope:** deterministic probe, decode, hash/privacy, frozen-frame, receipt-timing, temporal visible-result/final-hold, decoded clipping, final-state, and fail-closed approval gates are implemented and tested. Causal or semantic result proof is not claimed.
 5. Validate installability in Codex Desktop, run a real approved-site demonstration, and publish a candid capability/limitation matrix. **Complete for v0.2.0:** protected-main merge, green main/tag CI, published release asset, pinned Git marketplace installation, installed stdio MCP smoke, headed authorized-site acceptance, professional-usability audit, security review, canonical package checks, and the candid capability/limitation matrix are verified.
 6. Release and validate v0.3.0. **Complete:** protected-main merge, green CI after infrastructure retry, public release, enabled installation, installed version and exact ten-tool smoke, matching bundle SHA, and authorized Codex Desktop Browser workflow are verified.
+7. Release and validate v0.5.0 near-output-parity workflow. **In progress:** V2 project/media/profile contracts, private visual and audio pipelines, professional mixing, preview judgment, decoded visual-media service rendering, capture budgets, tracked-file CI, and the clean-room output-parity fixture contract are implemented in the working tree. Executable parity, remaining MCP/editorial automation, independent release audit, live Browser acceptance, public tag/release, and clean-installed runtime proof remain open.
 
 ## Done when
 
@@ -50,3 +51,7 @@ Deliver a public, reproducible Codex plugin named `recordly-codex` and a first v
 - [x] Automated checks verify broker-timed trusted-click and trusted-wheel-derived scroll actions, temporal decoded visible-result alignment, final hold, output dimensions/duration/decodeability, frozen-frame detection, decoded edge/border/matte/aspect clipping, and declared final state. The visible-result proof is explicitly temporal and non-causal.
 - [x] The public documentation names the supported environment, privacy boundary, upstream license boundary, and human-intervention triggers.
 - [x] Remaining unsupported workflows and production risks are explicit.
+- [ ] Every v0.5.0 output-parity fixture is actually rendered and decoded across landscape, square, and vertical MP4/GIF outputs; declarative manifest validation alone does not satisfy this gate.
+- [ ] Imported visual and normalized audio media, recording profiles, preview judgment, bounded revision, and presentation controls are reachable through the shipped MCP/skill workflow and verified from the generated bundle.
+- [ ] The full tracked-source CI, security, compatibility, performance, and decoded professional-output gates pass from a clean release candidate.
+- [ ] v0.5.0 is merged to protected `main`, tagged and publicly released, clean-installed from the marketplace, raw-stdio smoked at the exact shipped tool/version surface, and accepted on one authorized live Codex Desktop Browser workflow.
