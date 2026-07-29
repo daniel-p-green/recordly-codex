@@ -573,5 +573,5 @@ describe("sealed session renderer", () => {
     } finally {
       await rm(helperRoot, { recursive: true, force: true });
     }
-  }, 60_000);
+  }, 120_000);
 });

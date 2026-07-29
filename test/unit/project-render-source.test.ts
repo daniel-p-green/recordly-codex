@@ -163,6 +163,28 @@ describe("source-keyed project render evidence", () => {
       framePath,
     ]);
     await chmod(framePath, 0o600);
+    const { stdout: encodedGeometry } = await execFileAsync(
+      await resolveMediaExecutable("ffprobe"),
+      [
+        "-v",
+        "error",
+        "-select_streams",
+        "v:0",
+        "-show_entries",
+        "stream=width,height",
+        "-of",
+        "csv=p=0",
+        framePath,
+      ],
+    );
+    const [encodedWidth, encodedHeight] = String(encodedGeometry)
+      .trim()
+      .split(",")
+      .map((value) => Number(value));
+    const declaredWidth = 1200;
+    const declaredHeight = Math.round(
+      ((encodedHeight as number) * declaredWidth) / (encodedWidth as number),
+    );
     const frameSha256 = sha256(await readFile(framePath));
     const timeline = { durationUs: 1, slots: [{ tUs: 1 }] };
     const source = {
@@ -171,15 +193,19 @@ describe("source-keyed project render evidence", () => {
       manifestSha256: "",
       timelineSha256: sha256(canonicalJson(timeline)),
       frameSetSha256: sha256(frameSha256),
-      sourceWidth: 1200,
-      sourceHeight: 1140,
+      sourceWidth: declaredWidth,
+      sourceHeight: declaredHeight,
       durationUs: 1,
     };
     const manifest = {
       schemaVersion: 1,
       kind: "recordly-codex-delivery",
       sessionId,
-      source: { width: 1200, height: 1140, aggregateSha256: source.frameSetSha256 },
+      source: {
+        width: declaredWidth,
+        height: declaredHeight,
+        aggregateSha256: source.frameSetSha256,
+      },
       timeline,
       cursorTrack: [],
       observedActions: [],
@@ -191,14 +217,14 @@ describe("source-keyed project render evidence", () => {
     });
     await writeFile(
       join(sessionRoot, "capture-events.jsonl"),
-      `${JSON.stringify({ sessionId, type: "frame", frameId: 1, receiptOffsetUs: 1, imagePath: "frames/raw/frame-000001.jpg", sha256: frameSha256, width: 1200, height: 1140 })}\n`,
+      `${JSON.stringify({ sessionId, type: "frame", frameId: 1, receiptOffsetUs: 1, imagePath: "frames/raw/frame-000001.jpg", sha256: frameSha256, width: declaredWidth, height: declaredHeight })}\n`,
       { mode: 0o600 },
     );
     const reader = await createVerifiedCaptureSource({ artifactRoot, source, stagingRoot });
     const frame = await reader.frameAt(1);
-    expect(frame.pixels).toHaveLength(1200 * 1140 * 3);
+    expect(frame.pixels).toHaveLength(declaredWidth * declaredHeight * 3);
     expect(frame.pixels[0]).toBeGreaterThan(200);
-    const incompatible = { ...source, sourceWidth: 1200, sourceHeight: 900 };
+    const incompatible = { ...source, sourceWidth: declaredWidth, sourceHeight: 900 };
     await expect(
       createVerifiedCaptureSource({ artifactRoot, source: incompatible, stagingRoot }),
     ).rejects.toThrow(/manifest|geometry/i);
