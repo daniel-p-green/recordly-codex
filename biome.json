@@ -8,7 +8,9 @@
       "!!node_modules",
       "!!recordings",
       "!!artifacts",
-      "!!tmp"
+      "!!tmp",
+      "!!.playwright-mcp",
+      "!!plugin-runtime/recordly-codex-mcp.mjs"
     ]
   },
   "formatter": {

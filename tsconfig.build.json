@@ -1,0 +1,27 @@
+{
+  "extends": "./tsconfig.json",
+  "compilerOptions": {
+    "noEmit": false,
+    "outDir": "./dist",
+    "rootDir": ".",
+    "sourceMap": false,
+    "declaration": false,
+    "declarationMap": false
+  },
+  "include": [
+    "mcp/server.ts",
+    "mcp/server-factory.ts",
+    "mcp/browser-helper.ts",
+    "mcp/capture-broker.ts",
+    "mcp/handlers.ts",
+    "mcp/schemas.ts",
+    "mcp/session-store-service.ts",
+    "mcp/types.ts",
+    "src/contracts/**/*.ts",
+    "src/manifest/**/*.ts",
+    "src/encoder/**/*.ts",
+    "src/render/**/*.ts",
+    "src/session/**/*.ts",
+    "src/timeline/**/*.ts"
+  ]
+}

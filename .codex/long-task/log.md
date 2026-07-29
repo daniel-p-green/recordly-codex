@@ -22,3 +22,17 @@ Record meaningful milestones only. Keep entries concise and evidence-based.
 - Verified: The public protected repository's initial CI is green. A clean `npm ci` completed with zero reported audit vulnerabilities. The 34-test suite reported 93.92% line and 85.74% branch coverage before final CI threshold configuration. The E2E fixture blocks external requests and verifies a 1920x1080, 30 fps, 30-frame silent H.264 MP4, manifest, telemetry, and sampled frame.
 - Next: Add the Codex Desktop Browser-to-local-engine MCP/control bridge, then run and preserve evidence from one real approved public-site workflow.
 - Blocker or risk: The E2E browser is system Chrome driven by Playwright Core. It is intentionally not evidence that Codex Browser can control the local runtime or that an arbitrary approved site is safe for unattended recording.
+
+## 2026-07-28 — Browser helper containment verified; Browser runtime boundary remains blocked
+
+- Outcome: Moved generated start/stop helpers into the ignored, fixed `.playwright-mcp/recordly-codex/<session-id>/` bridge while keeping configuration, telemetry, frames, and summaries under the private owned artifact root.
+- Verified: Built stdio MCP still exposes exactly five tools. The focused bridge contract has 18 passing tests; the full suite has 62 passing tests, with 91.35% lines and 82.26% branches. Helpers and per-session bridge directories are private, symlink-checked, and removed with the matching owned session. `npm ci`, `npm run check`, and plugin validation pass.
+- Next: Add a persistent local bridge or Browser-supported module-loading contract before claiming real Codex Browser capture support.
+- Blocker or risk: The earlier module-loader approach was not a viable capture path. It is superseded by the generated helper and loopback-broker design recorded below; do not interpret this historical entry as the current capability statement.
+
+## 2026-07-28 — Brokered Browser capture and delivery documentation reconciled
+
+- Outcome: Replaced the blocked runtime assumption with the supported helper-to-loopback-broker path. The public contract now names the five MCP tools, helper claim, receipt timing, seal-triggered delivery, privacy boundary, and required Browser host capability.
+- Verified: Final approved live evidence covered the authorized public workflow at a high level: helper claim, bounded hero/scroll capture, receipt-timed render, and contained MP4/manifest/quality-report delivery. No captured pixels, local paths, tokens, or hashes are retained in public documentation.
+- Next: Perform marketplace installation and Codex Desktop compatibility checks from a released revision; preserve only sanitized proof.
+- Blocker or risk: `browser_run_code_unsafe`, FFmpeg/FFprobe, and the Codex Desktop marketplace install are host/runtime prerequisites. Unsupported sensitive or irreversible actions still stop for a user.

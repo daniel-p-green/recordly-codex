@@ -19,6 +19,7 @@ describe("sanitized render fixture", () => {
       expect(probe).toEqual({
         width: 1920,
         height: 1080,
+        pixelFormat: "yuv420p",
         fps: 30,
         frameCount: 30,
         durationSeconds: 1,
@@ -72,6 +73,7 @@ describe("sanitized render fixture", () => {
         {
           width: 1920,
           height: 1080,
+          pixelFormat: "yuv420p",
           fps: 30,
           frameCount: 30,
           durationSeconds: 1,
@@ -80,6 +82,7 @@ describe("sanitized render fixture", () => {
         {
           width: 1920,
           height: 1080,
+          pixelFormat: "yuv420p",
           fps: 30,
           frameCount: 30,
           durationSeconds: 1,

@@ -1,41 +1,31 @@
 ---
 name: recordly-codex
-description: Plan, rehearse, and quality-gate deterministic interactive website recordings through Codex Browser. Use when a user asks Codex to turn an approved URL or site workflow into a professional recording plan, capture manifest, or browser-driven demo video.
+description: Create and direct evidence-backed interactive website recordings through Codex Desktop Browser and local MCP tools. Use for an approved URL and a bounded objective; stop at credentials, permissions, CAPTCHA, payment, sensitive uploads, or irreversible actions.
 ---
 
 # Recordly Codex
 
-Create repeatable website-recording workflows for Codex Desktop Browser. Treat this skill as a director and quality controller; use deterministic code for capture, rendering, encoding, and artifact checks once those runtime components exist.
+Use this skill only for an approved public or explicitly pre-authenticated website flow. Codex directs the Browser; local deterministic code persists frames, stamps receipt timing, renders, encodes, and checks artifacts. Never place raw frames, cookies, full DOM text, or private page data in model context.
 
 ## Preconditions
 
-- Require Codex Desktop Browser (`browser:browser`, target `iab`) for browser inspection and interaction. Do not claim CLI or IDE browser support.
-- Confirm that the target URL and intended actions are authorized. Use public or explicitly pre-authenticated sessions only.
-- Stop for user approval when a workflow reaches credentials, payment, irreversible actions, CAPTCHA, consent prompts, file uploads containing sensitive material, or browser permission prompts that Codex cannot safely approve.
-- Do not attempt to bypass access controls, anti-bot controls, rate limits, or browser safety boundaries.
+- Require Codex Desktop Browser. Do not claim that CLI or IDE integrations can drive it.
+- Confirm the URL, objective, allowed origin scope, and that the intended actions are authorized.
+- Stop for credentials, MFA/OTP, CAPTCHA, consent/device permissions, payments, uploads, downloads, legal acceptance, publishing, deletion, access changes, or any irreversible action. Do not bypass controls.
+- Confirm the host exposes `browser_run_code_unsafe` before attempting capture. The local MCP service cannot itself drive Browser actions; that host capability is required to run the generated start/stop helpers.
 
-## Workflow
+## MCP session flow
 
-1. Inspect the approved target at a fixed viewport and identify the shortest user-visible story: opening state, key action, observable result, and ending state.
-2. Write a shot plan before acting. Give each shot a stable identifier, purpose, expected visible state, action, wait condition, and retry limit.
-3. Rehearse the full interaction in Browser. Record semantic action telemetry such as timestamp, click point, scroll position, navigation, viewport, and visible assertion. Do not treat a successful click as proof of the intended result.
-4. Produce a deterministic recording manifest from the rehearsal. Keep narrative choices separate from captured evidence so the same manifest can be rendered consistently.
-5. Capture only after the rehearsal passes. Use a fixed viewport, explicit waits, bounded retries, and a known output directory. Never place full frame streams or recordings in model context.
-6. Render from the manifest with deterministic tooling. Add cursor paths, click effects, framing, zooms, captions, backgrounds, and encoding only when the runtime supports them and the result is traceable to manifest data.
-7. Quality-check duration, output dimensions, frozen frames, action/result alignment, visible clipping, and final-state assertions. Retry only failed shots within their bounds; otherwise return the evidence and blocker.
+1. Call `create_recording_session` with `url` and `objective`. Add `allowedOrigins` only when the default origin is insufficient; use `allowPrivateOrigin` only with explicit authorization.
+2. Read the returned session ID, browser-start helper, browser-stop helper, and capture configuration. Helpers are one-session entrypoints, not arbitrary scripts.
+3. Rehearse in Browser: opening state, one clear action, and an observable result. Keep the viewport fixed. Use `record_browser_event` only for semantic `pointer`, `click`, `scroll`, `navigation`, `viewport`, and `marker` events. Validate the visible state after each action.
+4. Run the start helper once through `browser_run_code_unsafe`, perform the approved flow, then run the matching stop helper once. The helper claims a one-time loopback capability and posts screencast frames directly to the local broker. Frames never pass through the model.
+5. Call `inspect_recording_session`. If capture is complete, call `seal_recording_capture`. Sealing requires a successful browser summary, complete acknowledgements, and broker receipt timing; it then renders and quality-checks the recording.
+6. Treat the returned MP4, delivery manifest, and quality report as a delivery only when the report says approved. Otherwise report the failed gate and use `discard_recording_session` for an abandoned session.
 
-## Manifest contract
+## Quality and honesty
 
-Use one versioned JSON manifest as the handoff between planning, capture, rendering, and QA. Include at least:
-
-- `schemaVersion`, `recordingId`, and creation metadata.
-- Approved target URL, viewport, and session assumptions. Never put secrets or cookies in the manifest.
-- Ordered shot definitions, deterministic action telemetry, visible assertions, and retry limits.
-- Capture artifact references with timestamps and hashes when available.
-- Render profile, output path, and quality-gate results.
-
-Treat the manifest as an append-only evidence record during a run. Generate a new manifest revision for a deliberate replan rather than mutating captured evidence.
-
-## Completion language
-
-Say a recording is complete only after the requested media file and its manifest pass the declared quality gates. If a browser permission, identity challenge, unavailable browser feature, or unsupported website behavior blocks the workflow, report the exact blocked shot and the smallest human action needed. Do not promise unattended completion for arbitrary sites.
+- Receipt timing is local broker evidence: the first accepted frame is offset zero and later offsets are strictly increasing. Do not invent or submit timing through MCP.
+- The baseline renderer is a clean 1080p, 30 fps, silent deliverable. Do not claim cursor paths, click ripples, or zoom effects unless synchronized telemetry supports them.
+- A successful tool call or click is not a successful shot. Check the page's visible result, the capture summary, and then the quality report.
+- Report an unsupported Browser host capability, blocked approval, failed capture, or candidate-quality output plainly. Do not promise autonomous completion for arbitrary sites.

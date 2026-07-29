@@ -1,0 +1,9 @@
+{
+  "mcpServers": {
+    "recordly-codex": {
+      "command": "node",
+      "args": ["./plugin-runtime/recordly-codex-mcp.mjs"],
+      "cwd": "."
+    }
+  }
+}

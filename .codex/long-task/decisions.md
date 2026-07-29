@@ -47,3 +47,18 @@
 - Alternatives considered: Claim the fixture proves Codex Browser support; defer all browser verification until the MCP/control bridge exists; allow normal external browsing in CI.
 - Reason: The loopback fixture supplies reproducible browser, capture, manifest, encode, and decode evidence without conflating CI browser automation with Codex Desktop Browser control or exposing an external site.
 - Consequence or follow-up: Keep the fixture as CI-only proof. Do not describe it as the runtime interaction surface. Build and verify the Codex Browser-to-local-engine bridge and a real approved-site demo before claiming autonomous recording.
+
+## D-007 — Browser helper bridge exposes entrypoints only
+
+- Context: Codex Browser permits helper files only under its approved workspace roots, while recording evidence must remain private and untracked.
+- Decision: Generate exactly two per-session helper files below the ignored `.playwright-mcp/recordly-codex/<session-id>/` bridge. Keep all capture configuration and evidence under the owned private artifact root; reject symlinks and remove the bridge directory only after the session owner and evidence checks succeed.
+- Alternatives considered: Put all artifacts beneath the Browser root; return arbitrary helper paths from MCP; weaken Browser file allowlists.
+- Reason: This limits Browser-visible files to fixed generated entrypoints without exposing captured frames, telemetry, cookies, or arbitrary executable paths.
+- Consequence or follow-up: The helpers remain Browser-visible entrypoints only. The implemented loopback broker supplies the Node-side persistence path; host support for `browser_run_code_unsafe` remains a release-time compatibility requirement.
+
+## D-008 — Local broker receipt timing is delivery evidence
+
+- Context: Page-provided timestamps cannot prove when a frame reached local persistent storage.
+- Decision: The loopback broker assigns the first accepted frame offset zero and strictly increases later receipt offsets. Sealed delivery requires complete broker timing and rejects legacy timing for approval.
+- Reason: This preserves an auditable boundary between Browser capture, deterministic CFR rendering, and the model.
+- Consequence: Cursor, click, and zoom polish remain out of scope until semantic telemetry is synchronized to that same evidence clock.

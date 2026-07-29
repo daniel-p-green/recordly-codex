@@ -10,12 +10,16 @@
     "npm": ">=11.0.0"
   },
   "scripts": {
-    "check": "npm run format:check && npm run lint && npm run typecheck && npm run test && npm run fixtures:validate",
+    "build": "node scripts/clean-dist.mjs && tsc -p tsconfig.build.json",
+    "bundle": "node scripts/build-mcp-bundle.mjs",
+    "bundle:check": "node scripts/build-mcp-bundle.mjs --check",
+    "check": "npm run format:check && npm run lint && npm run typecheck && npm run bundle:check && npm run test && npm run fixtures:validate",
     "fixtures:validate": "node scripts/validate-fixtures.mjs",
     "format": "biome format --write .",
     "format:check": "biome format .",
     "lint": "biome lint .",
     "plugin:validate": "node scripts/validate-plugin.mjs",
+    "prepare": "npm run build && npm run bundle:check",
     "test": "vitest run",
     "test:coverage": "vitest run --coverage",
     "test:watch": "vitest",
@@ -25,9 +29,17 @@
     "@biomejs/biome": "2.5.6",
     "@types/node": "^22.0.0",
     "@vitest/coverage-v8": "^4.0.0",
+    "esbuild": "0.28.1",
     "playwright-core": "^1.58.2",
     "typescript": "^5.9.0",
     "vitest": "^4.0.0",
     "yaml": "^2.9.0"
+  },
+  "dependencies": {
+    "@modelcontextprotocol/sdk": "1.30.0",
+    "zod": "4.4.2"
+  },
+  "overrides": {
+    "@hono/node-server": "2.0.12"
   }
 }
