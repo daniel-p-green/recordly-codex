@@ -38,7 +38,7 @@ type CaptureFrame = {
   receiptOffsetUs?: number;
 };
 
-type ObservedAction =
+type ObservedEvent =
   | {
       type: "click";
       seq: number;
@@ -50,7 +50,15 @@ type ObservedAction =
       seq: number;
       receiptOffsetUs: number;
       data: { x: number; y: number; deltaX: number; deltaY: number };
+    }
+  | {
+      type: "pointer";
+      seq: number;
+      receiptOffsetUs: number;
+      data: { x: number; y: number; buttons: number; cursor: "default" | "pressed" };
     };
+
+type ObservedAction = Exclude<ObservedEvent, { type: "pointer" }>;
 
 type PpmImage = { width: number; height: number; pixels: Buffer };
 
@@ -338,10 +346,10 @@ function finiteCoordinate(value: unknown, label: string): number {
   return value;
 }
 
-async function readObservedActions(
+async function readObservedEvents(
   sessionRoot: string,
   sessionId: string,
-): Promise<ObservedAction[]> {
+): Promise<ObservedEvent[]> {
   const path = join(sessionRoot, "observed-events.jsonl");
   try {
     await regularFile(path, "observed events");
@@ -363,7 +371,7 @@ async function readObservedActions(
   if (lines.length > 10_000) {
     throw new SealedSessionRenderError("observed events exceed the broker persistence bound");
   }
-  const actions: ObservedAction[] = [];
+  const events: ObservedEvent[] = [];
   let previousReceiptOffsetUs = -1;
   for (const [index, line] of lines.entries()) {
     let parsed: unknown;
@@ -396,7 +404,7 @@ async function readObservedActions(
       if (button !== 0 && button !== 1 && button !== 2) {
         throw new SealedSessionRenderError("observed click button is invalid");
       }
-      actions.push({
+      events.push({
         type: "click",
         seq,
         receiptOffsetUs,
@@ -415,7 +423,7 @@ async function readObservedActions(
       if (deltaX === 0 && deltaY === 0) {
         throw new SealedSessionRenderError("observed scroll delta must be nonzero");
       }
-      actions.push({
+      events.push({
         type: "scroll",
         seq,
         receiptOffsetUs,
@@ -428,9 +436,29 @@ async function readObservedActions(
       });
       continue;
     }
+    if (event["type"] === "pointer") {
+      exactKeys(data, ["x", "y", "buttons", "cursor"], `observed event ${index + 1} pointer data`);
+      const buttons = integer(data["buttons"], "observed pointer buttons");
+      const cursor = data["cursor"];
+      if (buttons > 31 || (cursor !== "default" && cursor !== "pressed")) {
+        throw new SealedSessionRenderError("observed pointer state is invalid");
+      }
+      events.push({
+        type: "pointer",
+        seq,
+        receiptOffsetUs,
+        data: {
+          x: finiteCoordinate(data["x"], "observed pointer x"),
+          y: finiteCoordinate(data["y"], "observed pointer y"),
+          buttons,
+          cursor,
+        },
+      });
+      continue;
+    }
     throw new SealedSessionRenderError(`observed event ${index + 1} type is unsupported`);
   }
-  return actions;
+  return events;
 }
 
 function cfrFrames(frames: readonly CaptureFrame[]): {
@@ -1029,7 +1057,13 @@ export async function renderSealedSession(input: {
   const origin = new URL(request.url).origin;
   const summary = await readSummary(sessionRoot, input.sessionId, origin);
   const frames = await readFrames(tree, input.sessionId, summary.acceptedFrames);
-  const observedActions = await readObservedActions(sessionRoot, input.sessionId);
+  const observedEvents = await readObservedEvents(sessionRoot, input.sessionId);
+  const observedActions = observedEvents.filter(
+    (event): event is Exclude<ObservedEvent, { type: "pointer" }> => event.type !== "pointer",
+  );
+  const observedPointers = observedEvents.filter(
+    (event): event is Extract<ObservedEvent, { type: "pointer" }> => event.type === "pointer",
+  );
   const telemetryPath = join(sessionRoot, "telemetry.ndjson");
   await regularFile(telemetryPath, "semantic telemetry");
   const telemetryText = await readFile(telemetryPath, "utf8");
@@ -1151,6 +1185,12 @@ export async function renderSealedSession(input: {
               cfrFrameIndex: nearestSlotIndex(timeline.slots, action.receiptOffsetUs),
             },
       ),
+      cursorTrack: observedPointers.map((pointer) => ({
+        x: pointer.data.x,
+        y: pointer.data.y,
+        state: pointer.data.cursor,
+        cfrFrameIndex: nearestSlotIndex(timeline.slots, pointer.receiptOffsetUs),
+      })),
       timeline: {
         schemaVersion: 1,
         fps: FPS,

@@ -17,7 +17,9 @@ const OBSERVED_RATE_WINDOW_US = 1_000_000;
 const OBSERVED_EVENT_CAP = 10_000;
 const OBSERVER_CHALLENGE_CAP = 32;
 const SCROLL_COALESCE_US = 16_667;
+const POINTER_COALESCE_US = 33_333;
 const MAX_COORDINATE = 1_000_000;
+const MAX_POINTER_BUTTONS = 31;
 
 type CaptureCounts = {
   receivedFrames: number;
@@ -46,7 +48,14 @@ type ObservedScroll = {
   data: { x: number; y: number; deltaX: number; deltaY: number };
 };
 
-type ObservedInput = ObservedClick | ObservedScroll;
+type CursorState = "default" | "pressed";
+
+type ObservedPointer = {
+  type: "pointer";
+  data: { x: number; y: number; buttons: number; cursor: CursorState };
+};
+
+type ObservedInput = ObservedClick | ObservedScroll | ObservedPointer;
 
 type PendingObserved = {
   receiptAtUs: number;
@@ -57,9 +66,9 @@ export type BrokerObservedEvent = {
   schemaVersion: 1;
   sessionId: string;
   seq: number;
-  type: "click" | "scroll";
+  type: "click" | "scroll" | "pointer";
   receiptOffsetUs: number;
-  data: Record<string, number>;
+  data: Record<string, number | CursorState>;
 };
 
 export type CaptureBroker = {
@@ -133,6 +142,23 @@ function observedInput(value: unknown): ObservedInput | undefined {
       (deltaX !== 0 || deltaY !== 0)
     ) {
       return { type: "scroll", data: { x, y, deltaX, deltaY } };
+    }
+  }
+  if (event["type"] === "pointer" && exactKeys(data, ["x", "y", "buttons", "cursor"])) {
+    const x = boundedNumber(data["x"]);
+    const y = boundedNumber(data["y"]);
+    const buttons = data["buttons"];
+    const cursor = data["cursor"];
+    if (
+      x !== undefined &&
+      y !== undefined &&
+      typeof buttons === "number" &&
+      Number.isSafeInteger(buttons) &&
+      buttons >= 0 &&
+      buttons <= MAX_POINTER_BUTTONS &&
+      (cursor === "default" || cursor === "pressed")
+    ) {
+      return { type: "pointer", data: { x, y, buttons, cursor } };
     }
   }
   return undefined;
@@ -230,6 +256,7 @@ export async function createCaptureBroker(input: BrokerInput): Promise<CaptureBr
   let observedRateCount = 0;
   let observerChallengesIssued = 0;
   let pendingScroll: PendingObserved | undefined;
+  let pendingPointer: PendingObserved | undefined;
   let failureReason: string | undefined;
   const observed: CaptureCounts = {
     receivedFrames: 0,
@@ -306,6 +333,11 @@ export async function createCaptureBroker(input: BrokerInput): Promise<CaptureBr
   const flushPendingScroll = async (): Promise<void> => {
     const pending = pendingScroll;
     pendingScroll = undefined;
+    if (pending !== undefined) await queueObserved(pending);
+  };
+  const flushPendingPointer = async (): Promise<void> => {
+    const pending = pendingPointer;
+    pendingPointer = undefined;
     if (pending !== undefined) await queueObserved(pending);
   };
   const writeSummary = async (finalCounts: CaptureCounts): Promise<void> => {
@@ -471,7 +503,20 @@ export async function createCaptureBroker(input: BrokerInput): Promise<CaptureBr
         return;
       }
       try {
-        if (event.type === "scroll") {
+        if (event.type === "pointer") {
+          await flushPendingScroll();
+          const previous = pendingPointer;
+          if (
+            previous?.event.type === "pointer" &&
+            receiptAtUs - previous.receiptAtUs <= POINTER_COALESCE_US
+          ) {
+            pendingPointer = { receiptAtUs, event };
+          } else {
+            await flushPendingPointer();
+            pendingPointer = { receiptAtUs, event };
+          }
+        } else if (event.type === "scroll") {
+          await flushPendingPointer();
           const previous = pendingScroll;
           if (
             previous?.event.type === "scroll" &&
@@ -497,6 +542,7 @@ export async function createCaptureBroker(input: BrokerInput): Promise<CaptureBr
           }
         } else {
           await flushPendingScroll();
+          await flushPendingPointer();
           await queueObserved({ receiptAtUs, event });
         }
         json(response, 200, { ok: true, accepted: true });
@@ -543,6 +589,7 @@ export async function createCaptureBroker(input: BrokerInput): Promise<CaptureBr
       }
       try {
         await flushPendingScroll();
+        await flushPendingPointer();
       } catch {
         pendingWrites -= 1;
         if (!captureFailed()) await setPhase("failed", "observed_event_persist_failed");
@@ -605,6 +652,7 @@ export async function createCaptureBroker(input: BrokerInput): Promise<CaptureBr
       }
       try {
         await flushPendingScroll();
+        await flushPendingPointer();
         await persistenceTail;
       } catch {
         if (phase !== "failed") await setPhase("failed", "observed_event_persist_failed");

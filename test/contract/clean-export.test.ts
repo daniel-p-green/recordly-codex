@@ -168,10 +168,15 @@ describe("clean marketplace export", () => {
         .map((tool) => tool.name)
         .sort();
       expect(names).toEqual([
+        "create_recording_project",
         "create_recording_session",
         "discard_recording_session",
+        "inspect_recording_project",
         "inspect_recording_session",
         "record_browser_event",
+        "render_recording_project_final",
+        "render_recording_project_preview",
+        "revise_recording_project",
         "seal_recording_capture",
       ]);
       const created = await transport.call(3, "tools/call", {

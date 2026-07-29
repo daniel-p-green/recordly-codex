@@ -33,6 +33,32 @@ export type { RenderedVideoProbe } from "./encoder/probe.js";
 export { assertFixtureContract } from "./encoder/probe.js";
 export type { CanonicalJsonValue } from "./manifest/index.js";
 export { canonicalJson } from "./manifest/index.js";
+export type {
+  AuthoredProjectText,
+  ProjectAssetReference,
+  ProjectCaptureSource,
+  ProjectRenderInput,
+  RecordingProject,
+} from "./project/index.js";
+export {
+  assertProjectTextReadyForExport,
+  canonicalRecordingProject,
+  MAX_AUTOMATED_PROJECT_REVISIONS,
+  reviseRecordingProject,
+  toProjectRenderInput,
+  validateRecordingProject,
+} from "./project/index.js";
+export type {
+  SourceClickSample,
+  SourceCursorSample,
+} from "./render/composition.js";
+export type {
+  ProjectRenderAssets,
+  RecordingProjectRenderInput,
+  RecordingProjectRenderResult,
+} from "./render/project-renderer.js";
+export { renderRecordingProject } from "./render/project-renderer.js";
+export type { LazyRasterSource, RasterFrame } from "./render/raster-compositor.js";
 export type { RenderedFixtureCandidate } from "./render/sanitized-fixture.js";
 export {
   cleanupRenderedFixtureCandidate,

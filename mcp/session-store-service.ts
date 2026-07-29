@@ -1,5 +1,5 @@
 // biome-ignore-all lint/complexity/useLiteralKeys: persisted broker state is untrusted dictionary data.
-import { randomUUID } from "node:crypto";
+import { createHash, randomUUID } from "node:crypto";
 import {
   chmod,
   link,
@@ -19,6 +19,13 @@ import {
   validateRecordingRequest,
   validateSessionEvent,
 } from "../src/contracts/index.js";
+import { canonicalJson } from "../src/manifest/index.js";
+import {
+  type RecordingProject,
+  reviseRecordingProject,
+  validateRecordingProject,
+} from "../src/project/index.js";
+import { renderRecordingProject } from "../src/render/project-renderer.js";
 import { type RenderedSealedSession, renderSealedSession } from "../src/render/sealed-session.js";
 import {
   type SessionFileSystem,
@@ -28,8 +35,16 @@ import {
 import { browserStartHelper, browserStopHelper } from "./browser-helper.js";
 import { type CaptureBroker, createCaptureBroker } from "./capture-broker.js";
 import { RecordingServiceUnavailableError } from "./handlers.js";
+import { loadProjectAssetRegistry } from "./project-asset-registry.js";
+import { RecordingProjectStore } from "./project-persistence.js";
+import {
+  createVerifiedCaptureSource,
+  readSourceKeyedCapturePresentationEvidence,
+} from "./project-render-source.js";
+import { createRenderPublication, publishThenCompareAndSwap } from "./render-publication.js";
 import type {
-  RecordingSessionService,
+  RecordingMcpService,
+  RecordingProjectView,
   RecordingSessionView,
   SemanticBrowserEvent,
 } from "./types.js";
@@ -38,6 +53,7 @@ const DIRECTORY_MODE = 0o700;
 const FILE_MODE = 0o600;
 const ownerTokenName = ".recordly-codex-owner-token";
 const sessionLocks = new Map<string, Promise<void>>();
+const projectLocks = new Map<string, Promise<void>>();
 const activeCaptureBrokers = new Map<string, CaptureBroker>();
 
 type SessionStoreServiceOptions = {
@@ -48,6 +64,7 @@ type SessionStoreServiceOptions = {
 
 type ServiceContext = {
   projectRoot: string;
+  ownerToken: string;
   store: SessionStore;
   clockUs: () => number;
 };
@@ -338,7 +355,7 @@ async function ensureBroker(artifactRoot: string, inspection: SessionInspection)
 }
 
 function generatedRequest(
-  input: Parameters<RecordingSessionService["create"]>[0],
+  input: Parameters<RecordingMcpService["create"]>[0],
   requestIdValue: string,
 ): RecordingRequest {
   const parsed = new URL(input.url);
@@ -357,10 +374,179 @@ function generatedRequest(
   });
 }
 
+function sha256(content: string | Buffer): string {
+  return createHash("sha256").update(content).digest("hex");
+}
+
+async function approvedSealedDeliveryManifest(input: {
+  artifactRoot: string;
+  sessionId: string;
+}): Promise<{ manifestPath: string; manifest: unknown; manifestSha256: string }> {
+  const artifacts = join(input.artifactRoot, input.sessionId, "artifacts");
+  const manifestPath = join(artifacts, "recording-manifest.json");
+  const qualityPath = join(artifacts, "quality-report.json");
+  const videoPath = join(artifacts, "recording.mp4");
+  for (const path of [manifestPath, qualityPath, videoPath]) {
+    const status = await lstat(path);
+    if (!status.isFile() || status.isSymbolicLink() || (status.mode & 0o077) !== 0) {
+      throw new RecordingServiceUnavailableError();
+    }
+  }
+  const manifestText = await readFile(manifestPath, "utf8");
+  const quality = JSON.parse(await readFile(qualityPath, "utf8")) as Record<string, unknown>;
+  const timing = quality["timing"] as Record<string, unknown> | undefined;
+  const artifactHashes = quality["artifactHashes"] as Record<string, unknown> | undefined;
+  const manifest = JSON.parse(manifestText) as Record<string, unknown>;
+  const artifact = manifest["artifact"] as Record<string, unknown> | undefined;
+  if (
+    quality["schemaVersion"] !== 1 ||
+    quality["kind"] !== "recordly-codex-quality-report" ||
+    quality["status"] !== "approved" ||
+    timing?.["mode"] !== "broker-receipt-offsets" ||
+    timing?.["eligibleForApproval"] !== true ||
+    typeof artifactHashes?.["videoSha256"] !== "string" ||
+    typeof artifactHashes?.["manifestSha256"] !== "string" ||
+    artifact?.["file"] !== "recording.mp4" ||
+    artifact?.["sha256"] !== artifactHashes["videoSha256"] ||
+    sha256(manifestText) !== artifactHashes["manifestSha256"] ||
+    sha256(await readFile(videoPath)) !== artifactHashes["videoSha256"]
+  ) {
+    throw new RecordingServiceUnavailableError();
+  }
+  return { manifestPath, manifest, manifestSha256: sha256(manifestText) };
+}
+
+function manifestProjectSource(input: {
+  sessionId: string;
+  projectId: string;
+  automatedRevisionLimit: number;
+  manifest: unknown;
+  manifestSha256: string;
+}): RecordingProject {
+  if (
+    input.manifest === null ||
+    typeof input.manifest !== "object" ||
+    Array.isArray(input.manifest)
+  ) {
+    throw new RecordingServiceUnavailableError();
+  }
+  const manifest = input.manifest as Record<string, unknown>;
+  const source = manifest["source"];
+  const timeline = manifest["timeline"];
+  if (
+    manifest["schemaVersion"] !== 1 ||
+    manifest["kind"] !== "recordly-codex-delivery" ||
+    manifest["sessionId"] !== input.sessionId ||
+    source === null ||
+    typeof source !== "object" ||
+    Array.isArray(source) ||
+    timeline === null ||
+    typeof timeline !== "object" ||
+    Array.isArray(timeline)
+  ) {
+    throw new RecordingServiceUnavailableError();
+  }
+  const sourceValue = source as Record<string, unknown>;
+  const timelineValue = timeline as Record<string, unknown>;
+  const cursorEvidence = manifest["cursorTrack"];
+  const actionEvidence = manifest["observedActions"];
+  const width = sourceValue["width"];
+  const height = sourceValue["height"];
+  const frameSetSha256 = sourceValue["aggregateSha256"];
+  const durationUs = timelineValue["durationUs"];
+  if (
+    !Number.isSafeInteger(width) ||
+    !Number.isSafeInteger(height) ||
+    !Number.isSafeInteger(durationUs) ||
+    (width as number) < 1 ||
+    (height as number) < 1 ||
+    (durationUs as number) < 1 ||
+    typeof frameSetSha256 !== "string" ||
+    !/^[a-f0-9]{64}$/iu.test(frameSetSha256) ||
+    (cursorEvidence !== undefined && !Array.isArray(cursorEvidence)) ||
+    !Array.isArray(actionEvidence)
+  ) {
+    throw new RecordingServiceUnavailableError();
+  }
+  const captureId = `capture-${sha256(input.sessionId).slice(0, 24)}`;
+  return validateRecordingProject({
+    schemaVersion: 1,
+    projectId: input.projectId,
+    revision: 0,
+    revisionPolicy: {
+      automatedRevisionLimit: input.automatedRevisionLimit,
+      automatedRevisionCount: 0,
+    },
+    captureSources: [
+      {
+        id: captureId,
+        sessionId: input.sessionId,
+        manifestSha256: input.manifestSha256,
+        timelineSha256: sha256(canonicalJson(timelineValue)),
+        frameSetSha256,
+        sourceWidth: width,
+        sourceHeight: height,
+        durationUs,
+      },
+    ],
+    output: {
+      profile: "landscape-1080p",
+      width: 1920,
+      height: 1080,
+      fps: 30,
+      format: "mp4",
+      quality: "high",
+    },
+    timeline: {
+      clips: [
+        {
+          id: `clip-${sha256(input.sessionId).slice(0, 24)}`,
+          sourceId: captureId,
+          trim: { startUs: 0, endUs: durationUs },
+          speedRegions: [],
+          zoomRegions: [],
+          transitionAfter: { kind: "cut", durationUs: 0 },
+        },
+      ],
+    },
+    presentation: {
+      cursor: {
+        visible: Array.isArray(cursorEvidence) && cursorEvidence.length > 0,
+        preset: "system",
+        sizePx: 28,
+        motion: "smoothed",
+        clickEffect: actionEvidence.some(
+          (event) =>
+            event !== null &&
+            typeof event === "object" &&
+            (event as { type?: unknown }).type === "click",
+        )
+          ? "ripple"
+          : "none",
+      },
+      frame: {
+        background: { kind: "gradient", startColor: "#111827", endColor: "#312e81" },
+        paddingPx: 40,
+        radiusPx: 24,
+        shadow: "soft",
+      },
+    },
+    overlays: { annotations: [], captions: [] },
+    audioTracks: [],
+    pipTracks: [],
+    renderHooks: [],
+    preview: { status: "not-requested" },
+  });
+}
+
+function projectView(project: RecordingProject, projectSha256: string): RecordingProjectView {
+  return { project, projectSha256 };
+}
+
 /** Local session persistence with browser helpers aligned to SessionStore's checked-in runtime contract. */
 export function createSessionStoreService(
   options: SessionStoreServiceOptions = {},
-): RecordingSessionService {
+): RecordingMcpService {
   const clockUs = options.clockUs ?? (() => Number(process.hrtime.bigint() / 1_000n));
   const projectRoot = resolve(process.cwd());
   const browserHelperRoot = join(projectRoot, ".playwright-mcp", "recordly-codex");
@@ -372,6 +558,7 @@ export function createSessionStoreService(
     .then(
       (ownerToken): ServiceContext => ({
         projectRoot,
+        ownerToken,
         clockUs,
         store: new SessionStore({
           root: artifactRoot,
@@ -387,24 +574,29 @@ export function createSessionStoreService(
     .catch(() => {
       throw new RecordingServiceUnavailableError();
     });
-  const serial = async <T>(sessionId: string, work: () => Promise<T>): Promise<T> => {
-    const lockKey = `${artifactRoot}:${sessionId}`;
-    const previous = sessionLocks.get(lockKey) ?? Promise.resolve();
+  const serial = async <T>(
+    locks: Map<string, Promise<void>>,
+    identity: string,
+    work: () => Promise<T>,
+  ): Promise<T> => {
+    const lockKey = `${artifactRoot}:${identity}`;
+    const previous = locks.get(lockKey) ?? Promise.resolve();
     let release: (() => void) | undefined;
     const current = new Promise<void>((resolveCurrent) => {
       release = resolveCurrent;
     });
-    sessionLocks.set(lockKey, current);
+    locks.set(lockKey, current);
     await previous;
     try {
       return await work();
     } finally {
       release?.();
-      if (sessionLocks.get(lockKey) === current) sessionLocks.delete(lockKey);
+      if (locks.get(lockKey) === current) locks.delete(lockKey);
     }
   };
 
   return {
+    renderProjectEnabled: true,
     create: async (input) => {
       const ready = await context;
       const request = generatedRequest(input, randomUUID());
@@ -418,7 +610,7 @@ export function createSessionStoreService(
       }
     },
     recordEvent: async ({ sessionId, event }) =>
-      serial(sessionId, async () => {
+      serial(sessionLocks, sessionId, async () => {
         const ready = await context;
         const inspection = await ready.store.inspect(sessionId);
         await ensureBroker(artifactRoot, inspection);
@@ -456,5 +648,123 @@ export function createSessionStoreService(
       await ready.store.discard(sessionId);
       return discarded;
     },
+    createProject: async ({ sessionId, projectId, automatedRevisionLimit }) =>
+      serial(sessionLocks, sessionId, async () =>
+        serial(projectLocks, projectId ?? sessionId, async () => {
+          const ready = await context;
+          const inspection = await ready.store.inspect(sessionId);
+          if (inspection.state !== "sealed") throw new RecordingServiceUnavailableError();
+          const delivery = await approvedSealedDeliveryManifest({ artifactRoot, sessionId });
+          const project = manifestProjectSource({
+            sessionId,
+            projectId: projectId ?? sessionId,
+            automatedRevisionLimit: automatedRevisionLimit ?? 4,
+            manifest: delivery.manifest,
+            manifestSha256: delivery.manifestSha256,
+          });
+          const stored = await new RecordingProjectStore(artifactRoot, ready.ownerToken).create(
+            project,
+          );
+          return projectView(stored.project, stored.sha256);
+        }),
+      ),
+    inspectProject: async ({ projectId }) => {
+      const ready = await context;
+      const stored = await new RecordingProjectStore(artifactRoot, ready.ownerToken).load(
+        projectId,
+      );
+      return projectView(stored.project, stored.sha256);
+    },
+    reviseProject: async ({ project, mode }) => {
+      const candidate = validateRecordingProject(project);
+      return serial(projectLocks, candidate.projectId, async () => {
+        const ready = await context;
+        const store = new RecordingProjectStore(artifactRoot, ready.ownerToken);
+        const current = await store.load(candidate.projectId);
+        const revised = reviseRecordingProject(current.project, candidate, mode);
+        const stored = await store.replace(revised, {
+          expectedRevision: current.project.revision,
+          expectedSha256: current.sha256,
+        });
+        return projectView(stored.project, stored.sha256);
+      });
+    },
+    renderProject: async ({ projectId, revision, kind }) =>
+      serial(projectLocks, projectId, async () => {
+        const ready = await context;
+        const store = new RecordingProjectStore(artifactRoot, ready.ownerToken);
+        const current = await store.load(projectId);
+        if (current.project.revision !== revision) throw new RecordingServiceUnavailableError();
+        if (
+          kind === "final" &&
+          (current.project.preview.status !== "ready" ||
+            current.project.preview.revision !== current.project.revision)
+        ) {
+          throw new RecordingServiceUnavailableError();
+        }
+        const extension = current.project.output.format;
+        const artifact = `projects/renders/${projectId}-r${revision}-${kind}.${extension}`;
+        const publication = await createRenderPublication({
+          artifactRoot,
+          fileName: `${projectId}-r${revision}-${kind}.${extension}`,
+        });
+        try {
+          const sourceInputs = await Promise.all(
+            current.project.captureSources.map((source) =>
+              Promise.all([
+                createVerifiedCaptureSource({
+                  artifactRoot,
+                  source,
+                  stagingRoot: publication.stagingRoot,
+                }),
+                readSourceKeyedCapturePresentationEvidence({ artifactRoot, source }),
+              ]),
+            ),
+          );
+          const sources = sourceInputs.map(([source]) => source);
+          const cursorTrack = sourceInputs.flatMap(([, evidence]) => evidence.cursorTrack);
+          const clickTrack = sourceInputs.flatMap(([, evidence]) => evidence.clickTrack);
+          const assets = await loadProjectAssetRegistry({
+            artifactRoot,
+            ownerToken: ready.ownerToken,
+            project: current.project,
+          });
+          await renderRecordingProject({
+            project: current.project,
+            sources,
+            assetRoot: assets.assetRoot,
+            assets: assets.assets,
+            outputPath: publication.temporaryPath,
+            ...(current.project.presentation.cursor.visible ? { cursorTrack } : {}),
+            ...(current.project.presentation.cursor.clickEffect !== "none" ? { clickTrack } : {}),
+          });
+          const artifactDigest = sha256(await readFile(publication.temporaryPath));
+          const updated = validateRecordingProject({
+            ...current.project,
+            preview:
+              kind === "preview"
+                ? { status: "ready", revision: current.project.revision }
+                : { status: "rendered", revision: current.project.revision },
+          });
+          const stored = await publishThenCompareAndSwap(publication, () =>
+            store.replace(updated, {
+              expectedRevision: current.project.revision,
+              expectedSha256: current.sha256,
+            }),
+          );
+          return {
+            ...projectView(stored.project, stored.sha256),
+            render: {
+              kind,
+              revision,
+              format: extension,
+              artifact,
+              sha256: artifactDigest,
+            },
+          };
+        } finally {
+          await publication.cleanup();
+        }
+      }),
   };
 }

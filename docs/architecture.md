@@ -6,7 +6,7 @@ Recordly Codex is a local Codex Desktop Browser plugin. The model plans and judg
 
 ```mermaid
 flowchart LR
-  I["Approved URL + objective"] --> M["Five-tool local MCP service"]
+  I["Approved URL + objective"] --> M["Ten-tool local MCP service"]
   M --> H["Per-session Browser helpers"]
   H --> B["Codex Desktop Browser host"]
   B -->|"loopback only"| C["Capture broker"]
@@ -22,7 +22,7 @@ The Browser host, not MCP, runs the helpers. It must expose `browser_run_code_un
 
 `create_recording_session` accepts `url`, `objective`, and optional `allowedOrigins`/`allowPrivateOrigin`. The service fixes the viewport at 1440×900 and delivery profile at 1920×1080, 30 fps, silent MP4 with bounded attempts. It creates a private session root, broker, capture configuration, and two generated helper entrypoints.
 
-The other tools are:
+The other capture-session tools are:
 
 | Tool | Purpose |
 | --- | --- |
@@ -32,6 +32,22 @@ The other tools are:
 | `discard_recording_session` | Close the broker and remove the owned session and helper entrypoints. |
 
 Frame and capture-health events are not MCP inputs. They are emitted by the local broker after a Browser helper posts an actual screencast frame.
+
+## Editable project contract
+
+Five additional tools operate after a quality-approved capture is sealed:
+
+| Tool | Purpose |
+| --- | --- |
+| `create_recording_project` | Create a canonical versioned project from one approved sealed capture. |
+| `inspect_recording_project` | Read the current project, revision, digest, and preview state. |
+| `revise_recording_project` | Replace the complete project with a validated monotonic manual or bounded automated revision. |
+| `render_recording_project_preview` | Render a preview for the exact current revision. |
+| `render_recording_project_final` | Render a final only when the same current revision already has a matching preview. |
+
+The project is the durable editing contract. It can reference approved capture sources and declare clip trims, speed ramps, cuts/crossfades, cursor/click evidence, zooms, annotations, captions, PiP, WAV audio, output quality, and explicit local render hooks. A new revision invalidates an older preview. Project creation, revision, and rendering are serialized by project ID with expected-revision/digest checks so stale operations cannot overwrite newer work.
+
+An approved v0.2.0 sealed delivery can be migrated without recapture. The v0.3.0 reader accepts a missing cursor track as empty, derives project evidence from the private sealed manifest rather than a legacy `0644` capture-event log, and scales proportional legacy screencast frames to the sealed geometry. It rejects incompatible aspect/geometry, digest, containment, or permission evidence.
 
 ## Capture, timing, and privacy
 
@@ -51,10 +67,14 @@ Sealing requires a stopped capture summary with complete acknowledgements, no re
 
 The delivery manifest includes origin, objective, aggregate evidence hashes, and quality provenance while omitting target path/query/fragment, credentials, and raw-frame paths. A receipt-timed, non-frozen capture is approved; a legacy-timed one is only a candidate.
 
-The visual baseline deliberately stays conservative: fixed framing and deterministic CFR video. Cursor synthesis, click effects, and zooms are out of delivery scope until their telemetry is synchronized to capture receipt timing. The runtime will not invent those visual events.
+The sealed-capture baseline deliberately stays conservative. The editable project renderer adds deterministic source-timed composition: trims, constant or ramped speed, cuts/crossfades, cursor and click effects from observed evidence, manual/automatic zooms, annotations, captions, PiP, WAV audio, and declared hooks. It emits MP4 or GIF with deterministic quality profiles; GIF rejects audio.
+
+Capture frames, PiP, and audio are never trusted by a hash-then-reopen pathname flow. Rendering copies the exact bytes read from one opened, bounded regular file into exclusive private snapshots, verifies digest and media type, and makes FFmpeg or the compositor consume only those snapshots. Final publication also uses a verified private staging path and atomic publication. Temporary staging is removed on success or failure.
 
 ## Supported scope and live evidence
 
 The final approved evidence exercised the local MCP service, one-time Browser-to-broker claim, bounded hero/scroll capture, receipt-timed rendering, and the three contained delivery artifacts against an authorized public workflow. Identifiers, paths, captured pixels, and hashes are intentionally not published.
 
-That evidence proves the supported path, not arbitrary web autonomy. It does not cover login, CAPTCHA, payment, uploads, downloads, browser permissions, cross-origin expansion, native windows, audio, or irreversible side effects. Those conditions stop the workflow for user direction.
+Final v0.3.0 candidate acceptance exercised an authorized Recordly.dev hero-to-features capture, approved v0.2.0 sealed-delivery migration, project revision without recapture, preview, and final rendering through the supported Codex Desktop Browser path. Raw MCP exposed ten tools. The capture accepted and acknowledged 892 frames with zero rejected frames. The decoded MP4 preview was 1920×1080 at 30 fps for 29.533333 seconds; private evidence remained mode `0600`, and visual QA passed. Revision advanced from 0 to 1 without recapture, and the second preview and final had the same deterministic SHA.
+
+That evidence proves one candidate workflow, not arbitrary web autonomy or a published installation. v0.3.0 still needs public release and clean marketplace-install verification. Browser/system audio capture, login, CAPTCHA, payment, uploads, downloads, browser permissions, cross-origin expansion, native windows, and irreversible side effects remain outside the supported autonomous workflow and stop for user direction.
