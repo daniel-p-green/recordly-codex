@@ -34,8 +34,14 @@ async function sha256(path: string): Promise<string> {
     .digest("hex");
 }
 
-async function makeFrame(path: string, interior: "black" | "white"): Promise<void> {
+async function makeFrame(
+  path: string,
+  interior: "black" | "white",
+  options: { dimensions?: "320x180" | "947x900"; thinRightScrollbar?: boolean } = {},
+): Promise<void> {
   const ffmpeg = await resolveMediaExecutable("ffmpeg");
+  const dimensions = options.dimensions ?? "320x180";
+  const scrollbar = options.thinRightScrollbar ? ",drawbox=x=iw-3:y=0:w=3:h=ih:c=white:t=fill" : "";
   await execFileAsync(ffmpeg, [
     "-hide_banner",
     "-loglevel",
@@ -43,9 +49,9 @@ async function makeFrame(path: string, interior: "black" | "white"): Promise<voi
     "-f",
     "lavfi",
     "-i",
-    `color=c=${interior}:s=320x180`,
+    `color=c=${interior}:s=${dimensions}`,
     "-vf",
-    "drawbox=x=0:y=0:w=iw:h=12:c=red:t=fill,drawbox=x=iw-12:y=0:w=12:h=ih:c=green:t=fill,drawbox=x=0:y=ih-12:w=iw:h=12:c=blue:t=fill,drawbox=x=0:y=0:w=12:h=ih:c=yellow:t=fill",
+    `drawbox=x=0:y=0:w=iw:h=12:c=red:t=fill,drawbox=x=iw-12:y=0:w=12:h=ih:c=green:t=fill,drawbox=x=0:y=ih-12:w=iw:h=12:c=blue:t=fill,drawbox=x=0:y=0:w=12:h=ih:c=yellow:t=fill${scrollbar}`,
     "-frames:v",
     "1",
     "-q:v",
@@ -148,6 +154,7 @@ async function fixture(
     observedPointer?: boolean;
     plannedTelemetry?: boolean;
     ownerToken?: string;
+    thinRightScrollbar?: boolean;
   } = {},
 ): Promise<{ artifactRoot: string; sessionId: string; sessionRoot: string }> {
   const artifactRoot = await mkdtemp(join(tmpdir(), "recordly-sealed-render-"));
@@ -158,8 +165,15 @@ async function fixture(
   await mkdir(frameRoot, { recursive: true, mode: 0o700 });
   const beforePath = join(frameRoot, "fixture-before.jpg");
   const afterPath = join(frameRoot, "fixture-after.jpg");
-  await makeFrame(beforePath, "black");
-  await makeFrame(afterPath, options.noVisibleResult ? "black" : "white");
+  const frameDimensions = options.thinRightScrollbar ? "947x900" : "320x180";
+  await makeFrame(beforePath, "black", {
+    dimensions: frameDimensions,
+    ...(options.thinRightScrollbar ? { thinRightScrollbar: true } : {}),
+  });
+  await makeFrame(afterPath, options.noVisibleResult ? "black" : "white", {
+    dimensions: frameDimensions,
+    ...(options.thinRightScrollbar ? { thinRightScrollbar: true } : {}),
+  });
   const frameCount = 24;
   for (let index = 0; index < frameCount; index += 1) {
     await copyFile(
@@ -225,8 +239,8 @@ async function fixture(
         frameId,
         imagePath,
         sha256: options.corruptHash && index === 1 ? "0".repeat(64) : digest,
-        width: 320,
-        height: 180,
+        width: options.thinRightScrollbar ? 947 : 320,
+        height: options.thinRightScrollbar ? 900 : 180,
         ...(options.timing === "legacy" ? {} : { receiptOffsetUs: index * 33_333 }),
       }),
     );
@@ -452,6 +466,26 @@ describe("sealed session renderer", () => {
       (await lstat(join(source.sessionRoot, "artifacts", "qa", "opening.ppm"))).mode & 0o777,
     ).toBe(0o600);
   }, 30_000);
+
+  it("accepts a resampled thin right-edge scrollbar without masking clipping", async () => {
+    const source = await fixture({ thinRightScrollbar: true });
+
+    const rendered = await renderSealedSession(source);
+    const quality = JSON.parse(await readFile(rendered.qualityReportPath, "utf8"));
+
+    expect(rendered.approved).toBe(true);
+    expect(quality.clipping).toMatchObject({
+      status: "pass",
+      expectedContentRect: { x: 444, y: 50, width: 1032, height: 980 },
+      samples: expect.arrayContaining([
+        expect.objectContaining({
+          frameIndex: 0,
+          edgesPresent: true,
+          maxEdgeColorDelta: expect.any(Number),
+        }),
+      ]),
+    });
+  }, 60_000);
 
   it("renders missing legacy timestamps only as a non-approved candidate", async () => {
     const source = await fixture({ timing: "legacy" });

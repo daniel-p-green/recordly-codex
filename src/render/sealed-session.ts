@@ -638,7 +638,12 @@ async function sampleScaledFrame(
   return parsePpm(await readFile(outputPath));
 }
 
-async function decodeSourceFrame(inputPath: string, outputPath: string): Promise<PpmImage> {
+async function decodeSourceFrame(
+  inputPath: string,
+  outputPath: string,
+  width?: number,
+  height?: number,
+): Promise<PpmImage> {
   const ffmpeg = await resolveMediaExecutable("ffmpeg");
   await runMediaProcess({
     executable: ffmpeg,
@@ -650,6 +655,9 @@ async function decodeSourceFrame(inputPath: string, outputPath: string): Promise
       "error",
       "-i",
       inputPath,
+      ...(width === undefined || height === undefined
+        ? []
+        : ["-vf", `scale=${width}:${height}:in_range=auto:out_range=limited`]),
       "-frames:v",
       "1",
       "-f",
@@ -896,8 +904,9 @@ function expectedContentRect(
   outerHeight: number;
 } {
   const scale = Math.min(1740 / sourceWidth, 980 / sourceHeight);
-  const width = Math.max(2, Math.floor((sourceWidth * scale) / 2) * 2);
-  const height = Math.max(2, Math.floor((sourceHeight * scale) / 2) * 2);
+  const nearestEven = (value: number): number => Math.max(2, Math.round(value / 2) * 2);
+  const width = nearestEven(sourceWidth * scale);
+  const height = nearestEven(sourceHeight * scale);
   const outerWidth = width + BORDER_PX * 2;
   const outerHeight = height + BORDER_PX * 2;
   const outerX = Math.floor((OUTPUT_WIDTH - outerWidth) / 2);
@@ -984,12 +993,14 @@ async function assessClipping(input: {
     const decodedSource = await decodeSourceFrame(
       source.absolutePath,
       join(input.workRoot, `clipping-source-${sampleIndex}.ppm`),
+      rect.width,
+      rect.height,
     );
     const sourceEdges = edgeMeans(decodedSource, {
       x: 0,
       y: 0,
-      width: decodedSource.width,
-      height: decodedSource.height,
+      width: rect.width,
+      height: rect.height,
     });
     const outputEdges = edgeMeans(output, rect);
     const maxEdgeColorDelta = Math.max(
