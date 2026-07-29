@@ -17,7 +17,7 @@ const digest = /^[a-f0-9]{64}$/u;
 const MAX_CAPTURE_FRAMES = 18_000;
 const MAX_CAPTURE_FRAME_BYTES = 64 * 1024 * 1024;
 
-type CaptureFrame = { tUs: number; path: string; sha256: string };
+type CaptureFrame = { frameId: number; tUs: number; path: string; sha256: string };
 type JsonObject = Record<string, unknown> & {
   sessionId?: unknown;
   type?: unknown;
@@ -35,6 +35,8 @@ type JsonObject = Record<string, unknown> & {
   durationUs?: unknown;
   slots?: unknown;
   tUs?: unknown;
+  outputFrame?: unknown;
+  sourceFrameId?: unknown;
   cursorTrack?: unknown;
   observedActions?: unknown;
   x?: unknown;
@@ -303,6 +305,7 @@ async function parseFrames(input: {
       throw new RangeError("capture frame digest does not match evidence");
     }
     frames.push({
+      frameId: event.frameId as number,
       tUs: event.receiptOffsetUs as number,
       path: resolved,
       sha256: event.sha256.toLowerCase(),
@@ -316,21 +319,24 @@ async function parseFrames(input: {
 
 function boundedFrameSamples(
   frames: readonly CaptureFrame[],
-  slots: readonly number[],
+  slots: readonly { tUs: number; sourceFrameId: number }[],
 ): Array<{ tUs: number; sha256: string }> {
   const maximum = 10_000;
-  if (frames.length !== slots.length || frames.length === 0)
+  if (slots.length === 0 || frames.length === 0)
     throw new RangeError("delivery timeline does not match capture frames");
+  const framesById = new Map(frames.map((frame) => [frame.frameId, frame]));
   const indexes =
-    frames.length <= maximum
-      ? Array.from({ length: frames.length }, (_, index) => index)
+    slots.length <= maximum
+      ? Array.from({ length: slots.length }, (_, index) => index)
       : Array.from({ length: maximum }, (_, index) =>
-          Math.floor((index * (frames.length - 1)) / (maximum - 1)),
+          Math.floor((index * (slots.length - 1)) / (maximum - 1)),
         );
-  return indexes.map((index) => ({
-    tUs: slots[index] as number,
-    sha256: (frames[index] as CaptureFrame).sha256,
-  }));
+  return indexes.map((index) => {
+    const slot = slots[index] as { tUs: number; sourceFrameId: number };
+    const frame = framesById.get(slot.sourceFrameId);
+    if (frame === undefined) throw new RangeError("delivery timeline slot has no capture frame");
+    return { tUs: slot.tUs, sha256: frame.sha256 };
+  });
 }
 
 /**
@@ -385,13 +391,21 @@ export async function readVerifiedCaptureEditorialEvidence(input: {
     const slot = object(value, `delivery timeline slot ${index + 1}`);
     const tUs = integer(slot.tUs, "delivery timeline slot time");
     if (
+      Object.getOwnPropertyNames(slot).sort().join(",") !== "outputFrame,sourceFrameId,tUs" ||
+      integer(slot.outputFrame, "delivery timeline slot output frame") !== index ||
+      !Number.isSafeInteger(slot.sourceFrameId) ||
+      (slot.sourceFrameId as number) < 1 ||
       tUs > input.source.durationUs ||
       (index > 0 && tUs <= (slotsValue[index - 1] as { tUs: number }).tUs)
     )
       throw new RangeError("delivery timeline slot timing is invalid");
-    return tUs;
+    return { tUs, sourceFrameId: slot.sourceFrameId as number };
   });
   const frames = await parseFrames({ sessionRoot, source: input.source });
+  const frameIds = new Set(frames.map((frame) => frame.frameId));
+  if (slots.some((slot) => !frameIds.has(slot.sourceFrameId))) {
+    throw new RangeError("delivery timeline slot has no capture frame");
+  }
   const actionValues = manifest.observedActions;
   if (!Array.isArray(actionValues) || actionValues.length > 2_048) {
     throw new RangeError("delivery action evidence is invalid");
@@ -429,7 +443,7 @@ export async function readVerifiedCaptureEditorialEvidence(input: {
       id: `evt-${hash(input.source.id).slice(0, 16)}-${index}`,
       source: "observed" as const,
       sourceId: input.source.id,
-      tUs: slots[cfrFrameIndex as number] as number,
+      tUs: (slots[cfrFrameIndex as number] as { tUs: number; sourceFrameId: number }).tUs,
       kind: action.type as "click" | "scroll",
       x: action.x,
       y: action.y,

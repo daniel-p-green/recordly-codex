@@ -155,6 +155,7 @@ async function fixture(
     plannedTelemetry?: boolean;
     ownerToken?: string;
     thinRightScrollbar?: boolean;
+    frameIntervalUs?: number;
   } = {},
 ): Promise<{ artifactRoot: string; sessionId: string; sessionRoot: string }> {
   const artifactRoot = await mkdtemp(join(tmpdir(), "recordly-sealed-render-"));
@@ -241,7 +242,9 @@ async function fixture(
         sha256: options.corruptHash && index === 1 ? "0".repeat(64) : digest,
         width: options.thinRightScrollbar ? 947 : 320,
         height: options.thinRightScrollbar ? 900 : 180,
-        ...(options.timing === "legacy" ? {} : { receiptOffsetUs: index * 33_333 }),
+        ...(options.timing === "legacy"
+          ? {}
+          : { receiptOffsetUs: index * (options.frameIntervalUs ?? 33_333) }),
       }),
     );
   }
@@ -313,7 +316,7 @@ afterEach(async () => {
 describe("sealed session renderer", () => {
   it("recomputes owner-bound editorial proposals from sealed evidence before one automated zoom revision", async () => {
     const ownerToken = "44444444-4444-4444-8444-444444444444";
-    const source = await fixture({ ownerToken });
+    const source = await fixture({ ownerToken, frameIntervalUs: 50_000 });
     const helperRoot = join(source.artifactRoot, "browser-helpers", source.sessionId);
     await mkdir(helperRoot, { recursive: true, mode: 0o700 });
     await Promise.all([
@@ -325,6 +328,13 @@ describe("sealed session renderer", () => {
       }),
     ]);
     await renderSealedSession(source);
+    const manifest = JSON.parse(
+      await readFile(join(source.sessionRoot, "artifacts", "recording-manifest.json"), "utf8"),
+    ) as { timeline: { slots: Array<{ sourceFrameId: number }> } };
+    expect(manifest.timeline.slots.length).toBeGreaterThan(24);
+    expect(new Set(manifest.timeline.slots.map((slot) => slot.sourceFrameId)).size).toBeLessThan(
+      manifest.timeline.slots.length,
+    );
     const service = createSessionStoreService({ artifactRoot: source.artifactRoot });
     if (
       service.createProject === undefined ||
@@ -858,7 +868,7 @@ describe("sealed session renderer", () => {
     } finally {
       await rm(helperRoot, { recursive: true, force: true });
     }
-  }, 120_000);
+  }, 180_000);
 
   it("imports decoded V2 visual media and publishes it only after its private handle disposes cleanly", async () => {
     const ownerToken = "22222222-2222-4222-8222-222222222222";

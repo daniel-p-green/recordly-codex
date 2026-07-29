@@ -7,8 +7,10 @@ import {
   canonicalRecordingProject,
   migrateV1RecordingProject,
   reviseRecordingProject,
+  toProjectRenderInput,
   validateRecordingProject,
 } from "../../src/project/index.js";
+import { buildCompositionPlanFromProject } from "../../src/render/composition.js";
 
 const v1 = {
   schemaVersion: 1,
@@ -108,6 +110,65 @@ describe("recording project v2 contract and migration", () => {
     expect(applied.audioTracks[0]?.gainDb).toBe(target.snapshot.audioDefaults.gainDb);
     expect(applied.timeline.clips.at(-1)?.transitionAfter).toEqual({ kind: "cut", durationUs: 0 });
     expect(applied.timelineTransitions.at(-1)).toMatchObject({ family: "cut", durationUs: 0 });
+  });
+
+  it("keeps a profile click style optional when an observed cursor has no click evidence", () => {
+    const target = builtInRecordingProfiles().find((profile) => profile.profileId === "product");
+    if (target === undefined) throw new Error("product profile is missing");
+    const applied = applyRecordingProfile(validateRecordingProject(v1), target, "manual");
+    const renderInput = toProjectRenderInput(applied);
+    const cursorTrack = [
+      {
+        sourceId: "capture-1",
+        sourceTimeUs: 500_000,
+        x: 720,
+        y: 450,
+        state: "default" as const,
+      },
+    ];
+
+    const plan = buildCompositionPlanFromProject(renderInput, { cursorTrack });
+
+    expect(plan.style.cursor.clickEffect).toBe("ripple");
+    expect(plan.clickEffects).toEqual([]);
+
+    expect(() =>
+      buildCompositionPlanFromProject(renderInput, {
+        cursorTrack,
+        clickTrack: [
+          {
+            sourceId: "capture-1",
+            sourceTimeUs: 4_000_001,
+            x: 720,
+            y: 450,
+          },
+        ],
+      }),
+    ).toThrow(/click evidence is outside its source bounds/u);
+
+    const trimmed = {
+      ...renderInput,
+      timeline: {
+        ...renderInput.timeline,
+        clips: renderInput.timeline.clips.map((clip) => ({
+          ...clip,
+          trim: { startUs: 0, endUs: 1_000_000 },
+        })),
+      },
+    };
+    expect(() =>
+      buildCompositionPlanFromProject(trimmed, {
+        cursorTrack,
+        clickTrack: [
+          {
+            sourceId: "capture-1",
+            sourceTimeUs: 2_000_000,
+            x: 720,
+            y: 450,
+          },
+        ],
+      }),
+    ).toThrow(/click evidence does not intersect a rendered clip/u);
   });
 
   it("applies every validated output profile with its canonical dimensions", () => {

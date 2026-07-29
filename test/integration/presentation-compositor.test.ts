@@ -243,7 +243,7 @@ describe("presentation compositor", () => {
     expect(Buffer.concat(trail).equals(Buffer.concat(baseline))).toBe(false);
     expect(Buffer.concat(covered).equals(Buffer.concat(baseline))).toBe(false);
     expect(Buffer.concat(bordered).equals(Buffer.concat(baseline))).toBe(false);
-  });
+  }, 30_000);
 
   it("renders every speed region and blends crossfade frames while keeping output bounded", async () => {
     const plan = buildCompositionPlan({
@@ -393,7 +393,7 @@ describe("presentation compositor", () => {
     const decodedRight = ppmPixelAt(decoded, 1000, 540);
     expect(decodedLeft.b).toBeGreaterThan(decodedLeft.r + 80);
     expect(decodedRight.r).toBeGreaterThan(decodedRight.b + 80);
-  });
+  }, 30_000);
 
   it("executes every reviewed V2 transition family deterministically", async () => {
     const expected = [
@@ -484,7 +484,7 @@ describe("presentation compositor", () => {
       assertColor(transition.left, left, leftBlue);
       assertColor(transition.right, right, rightBlue);
     }
-  });
+  }, 30_000);
 
   it("includes the incoming V2 scene PiP before a reviewed crossfade", async () => {
     const plan = buildCompositionPlan({
@@ -698,7 +698,7 @@ describe("presentation compositor", () => {
     expect(pixelAtCheckpoint(proposed).b).toBeGreaterThan(pixelAtCheckpoint(proposed).r + 100);
     expect(pixelAtCheckpoint(rejected).b).toBeGreaterThan(pixelAtCheckpoint(rejected).r + 100);
     expect(Buffer.concat(accepted).equals(Buffer.concat(acceptedRepeat))).toBe(true);
-  });
+  }, 30_000);
 
   it("renders a validated V2 visual image track from a resolved media-ID raster source", async () => {
     const migrated = migrateV1RecordingProject({

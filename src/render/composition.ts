@@ -903,6 +903,7 @@ export function buildCompositionPlanFromProject(
   plan.style.cursor.smoothing = input.presentation.cursor.motion === "smoothed" ? 0.82 : 0;
   plan.style.cursor.clickEffect = input.presentation.cursor.clickEffect;
   const projectClickEffect = input.presentation.cursor.clickEffect;
+  const hasObservedClickEvidence = (evidence.clickTrack?.length ?? 0) > 0;
   if ((evidence.cursorTrack?.length ?? 0) > 10_000 || (evidence.clickTrack?.length ?? 0) > 10_000) {
     throw new RangeError("project presentation evidence exceeds its bound");
   }
@@ -977,8 +978,6 @@ export function buildCompositionPlanFromProject(
         });
   if (input.presentation.cursor.visible && (evidence.cursorTrack?.length ?? 0) === 0)
     throw new RangeError("visible project cursor requires observed cursor evidence");
-  if (input.presentation.cursor.clickEffect !== "none" && (evidence.clickTrack?.length ?? 0) === 0)
-    throw new RangeError("project click effect requires observed click evidence");
   if (
     input.presentation.cursor.visible &&
     !(evidence.cursorTrack ?? []).some((sample) =>
@@ -992,7 +991,7 @@ export function buildCompositionPlanFromProject(
   ) {
     throw new RangeError("cursor evidence does not intersect a rendered clip");
   }
-  if (projectClickEffect !== "none" && plan.clickEffects.length === 0) {
+  if (projectClickEffect !== "none" && hasObservedClickEvidence && plan.clickEffects.length === 0) {
     throw new RangeError("click evidence does not intersect a rendered clip");
   }
   return {
