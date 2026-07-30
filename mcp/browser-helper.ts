@@ -1,39 +1,22 @@
-type BrowserHelperInput = {
-  sessionId: string;
-  endpoint: string;
-  origin: string;
-};
+import {
+  isolatedWorldKeyExpressionSource,
+  observerExpressionSourceLines,
+} from "./browser-helper-observer.js";
+import { browserHelperRequestCode } from "./browser-helper-request.js";
+import { type BrowserHelperInput, browserHelperSessionKeys } from "./browser-helper-types.js";
 
-function requestCode(input: BrowserHelperInput): string {
-  return [
-    `const endpoint = ${JSON.stringify(input.endpoint)};`,
-    `const recordingSessionId = ${JSON.stringify(input.sessionId)};`,
-    `const recordingOrigin = ${JSON.stringify(input.origin)};`,
-    "const post = async (path, body, token) => {",
-    `  const response = await page.request.post(\`\${endpoint}\${path}\`, {`,
-    "    headers: token === undefined ? { 'content-type': 'application/json' } : { 'content-type': 'application/json', 'x-recordly-capability': token },",
-    "    data: body,",
-    "  });",
-    "  const result = await response.json();",
-    "  if (!response.ok() || result.ok !== true) throw new Error('recordly capture broker rejected request');",
-    "  return result;",
-    "};",
-  ].join("\n");
-}
+export type { BrowserHelperInput } from "./browser-helper-types.js";
 
 /** Generates a Browser-runner function snippet: no imports, filesystem, process, or model paths. */
 export function browserStartHelper(input: BrowserHelperInput): string {
-  const stateKey = `__recordlyCapture_${input.sessionId}`;
-  const worldName = `recordly-observed-${input.sessionId}`;
-  const cleanupKey = `__recordlyCleanup_${input.sessionId}`;
-  const pointerFlushKey = `__recordlyFlushPointer_${input.sessionId}`;
+  const keys = browserHelperSessionKeys(input.sessionId);
   return [
     "async (page) => {",
-    requestCode(input),
-    `  const stateKey = ${JSON.stringify(stateKey)};`,
-    `  const worldName = ${JSON.stringify(worldName)};`,
-    `  const cleanupKey = ${JSON.stringify(cleanupKey)};`,
-    `  const pointerFlushKey = ${JSON.stringify(pointerFlushKey)};`,
+    browserHelperRequestCode(input),
+    `  const stateKey = ${JSON.stringify(keys.stateKey)};`,
+    `  const worldName = ${JSON.stringify(keys.worldName)};`,
+    `  const cleanupKey = ${JSON.stringify(keys.cleanupKey)};`,
+    `  const pointerFlushKey = ${JSON.stringify(keys.pointerFlushKey)};`,
     "  if (page[stateKey] !== undefined) throw new Error('recordly capture already started');",
     "  const claim = await post('/claim', { sessionId: recordingSessionId, url: page.url() });",
     "  const token = claim.token;",
@@ -63,14 +46,12 @@ export function browserStartHelper(input: BrowserHelperInput): string {
     "  const staleExecutionContext = (error) => /(?:cannot find context with specified id|execution context was destroyed)/iu.test(error instanceof Error ? error.message : String(error));",
     "  const cleanupObserved = async (contextId) => {",
     "    if (!Number.isSafeInteger(contextId)) return;",
-    // biome-ignore lint/suspicious/noTemplateCurlyInString: emits the isolated-world cleanup key serialization.
-    "    const expression = `(() => { const cleanup = globalThis[${JSON.stringify(cleanupKey)}]; if (typeof cleanup === 'function') cleanup(); })()`;",
+    `    const expression = \`${isolatedWorldKeyExpressionSource("cleanupKey")}\`;`,
     "    await session.send('Runtime.evaluate', { expression, contextId, awaitPromise: false, returnByValue: true });",
     "  };",
     "  const flushObserved = async (contextId) => {",
     "    if (!Number.isSafeInteger(contextId)) return;",
-    // biome-ignore lint/suspicious/noTemplateCurlyInString: emits the isolated-world pointer-flush key serialization.
-    "    const expression = `(() => { const flush = globalThis[${JSON.stringify(pointerFlushKey)}]; if (typeof flush === 'function') flush(); })()`;",
+    `    const expression = \`${isolatedWorldKeyExpressionSource("pointerFlushKey")}\`;`,
     "    await session.send('Runtime.evaluate', { expression, contextId, awaitPromise: false, returnByValue: true });",
     "  };",
     "  const retireObserved = (contextId) => { if (Number.isSafeInteger(contextId)) retiredObservedContexts.add(contextId); };",
@@ -103,23 +84,7 @@ export function browserStartHelper(input: BrowserHelperInput): string {
     "    if (!Number.isSafeInteger(world.executionContextId)) throw new Error('recordly isolated world unavailable');",
     "    const executionContextId = world.executionContextId;",
     "    if (!scopeCurrent()) { retireObserved(executionContextId); await cleanupRetiredObserved(); return; }",
-    "    const expression = `(() => {",
-    "      const nonceBytes = new Uint8Array(32); crypto.getRandomValues(nonceBytes);",
-    "      const nonce = Array.from(nonceBytes, (byte) => byte.toString(16).padStart(2, '0')).join('');",
-    `      const debug = console.debug.bind(console); const prior = globalThis[\${JSON.stringify(cleanupKey)}]; if (typeof prior === 'function') prior();`,
-    "      let lastX = window.scrollX; let lastY = window.scrollY; let wheelScheduled = false; let wheelAttempts = 0; let wheelRaf; let wheelTimer;",
-    "      let pointerPending; let pointerRaf; let pointerTimer; let lastPointerSentAt = -Infinity;",
-    `      const send = (event) => debug(\${JSON.stringify(marker)}, JSON.stringify({ kind: 'event', nonce, event }));`,
-    "      const click = (event) => { if (event.isTrusted) send({ type: 'click', data: { x: event.clientX, y: event.clientY, button: event.button } }); };",
-    "      const emitPointer = () => { pointerRaf = undefined; pointerTimer = undefined; const event = pointerPending; pointerPending = undefined; if (event === undefined) return; const elapsed = performance.now() - lastPointerSentAt; if (elapsed < 33) { pointerPending = event; pointerTimer = setTimeout(emitPointer, Math.ceil(33 - elapsed)); return; } lastPointerSentAt = performance.now(); send({ type: 'pointer', data: { x: event.x, y: event.y, buttons: event.buttons, cursor: event.buttons === 0 ? 'default' : 'pressed' } }); };",
-    "      const pointer = (event) => { if (!event.isTrusted || !Number.isFinite(event.clientX) || !Number.isFinite(event.clientY) || !Number.isSafeInteger(event.buttons) || event.buttons < 0 || event.buttons > 31) return; pointerPending = { x: event.clientX, y: event.clientY, buttons: event.buttons }; if (pointerRaf === undefined && pointerTimer === undefined) pointerRaf = requestAnimationFrame(emitPointer); };",
-    "      const flushPointer = () => { if (pointerRaf !== undefined) cancelAnimationFrame(pointerRaf); if (pointerTimer !== undefined) clearTimeout(pointerTimer); pointerRaf = undefined; pointerTimer = undefined; if (pointerPending !== undefined) { lastPointerSentAt = -Infinity; emitPointer(); } };",
-    `      const settleWheel = () => { wheelRaf = requestAnimationFrame(() => { const x = window.scrollX; const y = window.scrollY; const deltaX = x - lastX; const deltaY = y - lastY; if (deltaX !== 0 || deltaY !== 0) { wheelScheduled = false; lastX = x; lastY = y; debug(\${JSON.stringify(marker)}, JSON.stringify({ kind: 'event', nonce, event: { type: 'scroll', data: { x, y, deltaX, deltaY } } })); return; } if (wheelAttempts++ >= 119) { wheelScheduled = false; return; } wheelTimer = setTimeout(settleWheel, 16); }); };`,
-    "      const wheel = (event) => { if (!event.isTrusted || wheelScheduled) return; wheelScheduled = true; wheelAttempts = 0; settleWheel(); };",
-    "      window.addEventListener('pointermove', pointer, { capture: true, passive: true }); window.addEventListener('click', click, true); window.addEventListener('wheel', wheel, { capture: true, passive: true });",
-    `      globalThis[\${JSON.stringify(pointerFlushKey)}] = flushPointer; globalThis[\${JSON.stringify(cleanupKey)}] = () => { flushPointer(); window.removeEventListener('pointermove', pointer, true); window.removeEventListener('click', click, true); window.removeEventListener('wheel', wheel, true); if (wheelRaf !== undefined) cancelAnimationFrame(wheelRaf); if (wheelTimer !== undefined) clearTimeout(wheelTimer); delete globalThis[\${JSON.stringify(pointerFlushKey)}]; delete globalThis[\${JSON.stringify(cleanupKey)}]; };`,
-    `      debug(\${JSON.stringify(marker)}, JSON.stringify({ kind: 'ready', nonce }));`,
-    "    })()`;",
+    ...observerExpressionSourceLines(),
     "    let evaluated; try { evaluated = await session.send('Runtime.evaluate', { expression, contextId: executionContextId, awaitPromise: false, returnByValue: true }); } catch (error) { if (!scopeCurrent()) { retireObserved(executionContextId); await cleanupRetiredObserved(); return; } throw error; }",
     "    if (evaluated?.exceptionDetails !== undefined) throw new Error('recordly isolated observer evaluation failed');",
     "    if (!scopeCurrent()) { retireObserved(executionContextId); await cleanupRetiredObserved(); return; }",
@@ -222,11 +187,11 @@ export function browserStartHelper(input: BrowserHelperInput): string {
 }
 
 export function browserStopHelper(input: BrowserHelperInput): string {
-  const stateKey = `__recordlyCapture_${input.sessionId}`;
+  const keys = browserHelperSessionKeys(input.sessionId);
   return [
     "async (page) => {",
-    requestCode(input),
-    `  const stateKey = ${JSON.stringify(stateKey)};`,
+    browserHelperRequestCode(input),
+    `  const stateKey = ${JSON.stringify(keys.stateKey)};`,
     "  const capture = page[stateKey];",
     "  if (capture === undefined || capture.recordingSessionId !== recordingSessionId) throw new Error('recordly capture is not active');",
     "  capture.session.off('Page.screencastFrame', capture.listener);",

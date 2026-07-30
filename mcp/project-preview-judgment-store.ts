@@ -1,10 +1,11 @@
 // biome-ignore-all lint/complexity/useLiteralKeys: untrusted persisted judgment dictionaries require exact key checks.
+
 import { randomUUID } from "node:crypto";
 import { chmod, link, lstat, mkdir, readFile, realpath, unlink, writeFile } from "node:fs/promises";
 import { isAbsolute, join, relative, resolve } from "node:path";
-
 import { canonicalJson } from "../src/manifest/index.js";
 import { type PreviewJudgment, validatePreviewJudgment } from "../src/project/preview-judgment.js";
+import { isContainedPath } from "../src/safe/path.js";
 
 const DIRECTORY_MODE = 0o700;
 const FILE_MODE = 0o600;
@@ -21,11 +22,6 @@ type JudgmentIdentity = Pick<
 >;
 
 type Envelope = { schemaVersion: 1; ownerToken: string; judgment: PreviewJudgment };
-
-function contained(root: string, candidate: string): boolean {
-  const value = relative(root, candidate);
-  return value.length > 0 && !value.startsWith("..") && !isAbsolute(value);
-}
 
 function sameIdentity(left: PreviewJudgment, right: JudgmentIdentity): boolean {
   return (
@@ -125,7 +121,7 @@ export class PreviewJudgmentStore {
       throw new RangeError("preview judgment identity is invalid");
     }
     const candidate = resolve(this.judgmentsRoot(), `${projectId}-r${revision}.json`);
-    if (!contained(this.judgmentsRoot(), candidate))
+    if (!isContainedPath(this.judgmentsRoot(), candidate))
       throw new RangeError("preview judgment escapes root");
     return candidate;
   }
@@ -165,7 +161,7 @@ export class PreviewJudgmentStore {
     if (!status.isDirectory() || status.isSymbolicLink() || (status.mode & 0o077) !== 0) {
       throw new RangeError("preview judgment directory is not private");
     }
-    if (!contained(artifactResolved, await realpath(root))) {
+    if (!isContainedPath(artifactResolved, await realpath(root))) {
       throw new RangeError("preview judgment directory escapes artifact root");
     }
   }
@@ -175,7 +171,7 @@ export class PreviewJudgmentStore {
     if (!status.isFile() || status.isSymbolicLink() || (status.mode & 0o077) !== 0) {
       throw new RangeError("preview judgment must be a private regular file");
     }
-    if (!contained(await realpath(this.judgmentsRoot()), await realpath(path))) {
+    if (!isContainedPath(await realpath(this.judgmentsRoot()), await realpath(path))) {
       throw new RangeError("preview judgment escapes storage root");
     }
   }

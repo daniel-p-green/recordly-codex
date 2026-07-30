@@ -10,6 +10,7 @@ import { assertCaptureSourceGeometryBounded } from "../src/project/capture-geome
 import type { ProjectCaptureSource } from "../src/project/index.js";
 import type { CursorSample } from "../src/render/composition.js";
 import type { LazyRasterSource, RasterFrame } from "../src/render/raster-compositor.js";
+import { isContainedPath } from "../src/safe/path.js";
 
 const execFileAsync = promisify(execFile);
 const framePath = /^frames\/raw\/frame-\d{6}\.(?:jpe?g|png)$/u;
@@ -81,11 +82,6 @@ export type VerifiedCaptureEditorialEvidence = {
   deadTime: ActivityAnalysisResult;
 };
 
-function contained(root: string, candidate: string): boolean {
-  const value = relative(root, candidate);
-  return value.length > 0 && !value.startsWith("..") && !isAbsolute(value);
-}
-
 function hash(value: Buffer | string): string {
   return createHash("sha256").update(value).digest("hex");
 }
@@ -110,7 +106,7 @@ async function privateRegular(
   label: string,
   allowLegacyModeTightening = false,
 ): Promise<string> {
-  if (!contained(root, path)) throw new RangeError(`${label} escapes its session`);
+  if (!isContainedPath(root, path)) throw new RangeError(`${label} escapes its session`);
   let ancestor = root;
   for (const segment of relative(root, path).split("/").slice(0, -1)) {
     ancestor = join(ancestor, segment);
@@ -124,7 +120,7 @@ async function privateRegular(
     throw new RangeError(`${label} must be a private regular file`);
   }
   const resolved = await realpath(path);
-  if (!contained(await realpath(root), resolved))
+  if (!isContainedPath(await realpath(root), resolved))
     throw new RangeError(`${label} resolves outside session`);
   if ((status.mode & 0o077) !== 0 && allowLegacyModeTightening) {
     await chmod(resolved, 0o600);
@@ -146,7 +142,7 @@ async function privateDirectory(path: string, root: string, label: string): Prom
     throw new RangeError(`${label} must be a private non-symlink directory`);
   }
   const resolved = await realpath(path);
-  if (!contained(await realpath(root), resolved)) {
+  if (!isContainedPath(await realpath(root), resolved)) {
     throw new RangeError(`${label} resolves outside artifact root`);
   }
   return resolved;
@@ -188,7 +184,7 @@ async function stageVerifiedCaptureFrame(input: {
     throw new RangeError("capture frame must remain a private regular file");
   }
   const sourceResolved = await realpath(input.frame.path);
-  if (!contained(await realpath(input.sessionRoot), sourceResolved)) {
+  if (!isContainedPath(await realpath(input.sessionRoot), sourceResolved)) {
     throw new RangeError("capture frame resolves outside its session");
   }
   if (sourceStatus.size < 1 || sourceStatus.size > MAX_CAPTURE_FRAME_BYTES) {
@@ -483,7 +479,7 @@ export async function createVerifiedCaptureSource(input: {
     "render staging directory",
   );
   const sessionRoot = resolve(artifactRoot, input.source.sessionId);
-  if (!contained(artifactRoot, sessionRoot))
+  if (!isContainedPath(artifactRoot, sessionRoot))
     throw new RangeError("capture session escapes artifact root");
   const manifestPath = join(sessionRoot, "artifacts", "recording-manifest.json");
   const manifestContent = await readFile(
@@ -599,7 +595,7 @@ export async function readVerifiedCapturePresentationEvidence(input: {
 }): Promise<CapturePresentationEvidence> {
   const artifactRoot = await realpath(input.artifactRoot);
   const sessionRoot = resolve(artifactRoot, input.source.sessionId);
-  if (!contained(artifactRoot, sessionRoot))
+  if (!isContainedPath(artifactRoot, sessionRoot))
     throw new RangeError("capture session escapes artifact root");
   const content = await readFile(
     await privateRegular(

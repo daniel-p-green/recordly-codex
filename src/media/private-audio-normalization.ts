@@ -3,8 +3,8 @@ import { createHash, randomUUID } from "node:crypto";
 import { constants } from "node:fs";
 import { link, lstat, open, realpath, unlink } from "node:fs/promises";
 import { isAbsolute, relative, resolve } from "node:path";
-
 import { resolveMediaExecutable } from "../encoder/ffmpeg.js";
+import { isContainedPath } from "../safe/path.js";
 import type { ImportedMedia } from "./private-media-library.js";
 
 const MAX_LIBRARY_OBJECT_BYTES = 512 * 1024 * 1024;
@@ -110,11 +110,6 @@ function errorCode(error: unknown): string | undefined {
     : undefined;
 }
 
-function contained(root: string, path: string): boolean {
-  const value = relative(root, path);
-  return value.length > 0 && !value.startsWith("..") && !value.startsWith("/");
-}
-
 function privateMode(mode: number): boolean {
   return (mode & 0o077) === 0;
 }
@@ -130,13 +125,13 @@ async function canonicalPrivateDirectory(path: string, label: string): Promise<s
 
 async function canonicalPrivateChild(root: string, name: string, label: string): Promise<string> {
   const path = resolve(root, name);
-  if (!contained(root, path)) fail(`${label} escaped its root`);
+  if (!isContainedPath(root, path)) fail(`${label} escaped its root`);
   const status = await lstat(path).catch(() => fail(`${label} is unavailable`));
   if (status.isSymbolicLink() || !status.isDirectory() || !privateMode(status.mode)) {
     fail(`${label} must be a private non-symlink directory`);
   }
   const resolved = await realpath(path);
-  if (!contained(root, resolved)) fail(`${label} escaped its root`);
+  if (!isContainedPath(root, resolved)) fail(`${label} escaped its root`);
   return resolved;
 }
 
@@ -258,7 +253,7 @@ async function storedAudio(
   validateReference(media);
   const objectPath = resolve(objectsRoot, media.sha256);
   const metadataPath = resolve(objectsRoot, `${media.sha256}.json`);
-  if (!contained(objectsRoot, objectPath) || !contained(objectsRoot, metadataPath)) {
+  if (!isContainedPath(objectsRoot, objectPath) || !isContainedPath(objectsRoot, metadataPath)) {
     fail("media reference escaped the library");
   }
   const object = await hashRegularFile(objectPath, MAX_LIBRARY_OBJECT_BYTES, "media object");
@@ -573,7 +568,7 @@ export async function createPrivateAudioNormalizer(input: {
       const audioId = expectedAudioId(media.sha256);
       const outputPath = resolve(root, `${audioId}.wav`);
       const metadataPath = resolve(root, `${audioId}.json`);
-      if (!contained(root, outputPath) || !contained(root, metadataPath)) {
+      if (!isContainedPath(root, outputPath) || !isContainedPath(root, metadataPath)) {
         fail("normalized audio output escaped its root");
       }
       const existing = await maybeNormalizedMetadata(metadataPath);
@@ -588,7 +583,7 @@ export async function createPrivateAudioNormalizer(input: {
 
       const temporaryPath = resolve(root, `.normalize-${randomUUID()}.wav`);
       const metadataTemporaryPath = resolve(root, `.normalize-${randomUUID()}.json`);
-      if (!contained(root, temporaryPath) || !contained(root, metadataTemporaryPath)) {
+      if (!isContainedPath(root, temporaryPath) || !isContainedPath(root, metadataTemporaryPath)) {
         fail("normalized audio temporary output escaped its root");
       }
       let outputPublished = false;

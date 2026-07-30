@@ -11,15 +11,11 @@ import {
   writeFile,
 } from "node:fs/promises";
 import { isAbsolute, join, relative, resolve } from "node:path";
+import { isContainedPath } from "../src/safe/path.js";
 
 const DIRECTORY_MODE = 0o700;
 const FILE_MODE = 0o600;
 const fileName = /^[A-Za-z0-9][A-Za-z0-9._-]{0,255}$/u;
-
-function contained(root: string, candidate: string): boolean {
-  const value = relative(root, candidate);
-  return value.length > 0 && !value.startsWith("..") && !isAbsolute(value);
-}
 
 function isNotFound(error: unknown): boolean {
   return (
@@ -36,7 +32,7 @@ async function privateDirectory(path: string, root: string, label: string): Prom
     throw new RangeError(`${label} must be a private non-symlink directory`);
   }
   const resolved = await realpath(path);
-  if (path !== root && !contained(root, resolved))
+  if (path !== root && !isContainedPath(root, resolved))
     throw new RangeError(`${label} escapes artifact root`);
   return resolved;
 }
@@ -47,7 +43,7 @@ async function privateRegularFile(path: string, root: string, label: string): Pr
     throw new RangeError(`${label} must be a private regular file`);
   }
   const resolved = await realpath(path);
-  if (!contained(root, resolved)) throw new RangeError(`${label} escapes render root`);
+  if (!isContainedPath(root, resolved)) throw new RangeError(`${label} escapes render root`);
   return resolved;
 }
 
@@ -102,7 +98,8 @@ export async function createRenderPublication(input: {
   await chmod(renders, DIRECTORY_MODE);
   await privateDirectory(renders, artifactRoot, "render directory");
   const outputPath = resolve(renders, input.fileName);
-  if (!contained(renders, outputPath)) throw new RangeError("render output escapes render root");
+  if (!isContainedPath(renders, outputPath))
+    throw new RangeError("render output escapes render root");
   const extension = input.fileName.slice(input.fileName.lastIndexOf("."));
   const temporaryPath = join(renders, `.${input.fileName}.${randomUUID()}.tmp${extension}`);
   await writeFile(temporaryPath, "", { mode: FILE_MODE, flag: "wx" });

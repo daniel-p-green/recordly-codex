@@ -1,12 +1,11 @@
 import { join } from "node:path";
-
-import type { ProjectMediaAsset, RecordingProject } from "../src/project/index.js";
 import {
   createPrivateVisualRasterAdapter,
   type RegisteredVisualMedia,
 } from "../src/media/private-visual-raster.js";
+import type { ProjectMediaAsset, RecordingProject } from "../src/project/index.js";
 import type { ResolvedVisualSource } from "../src/render/project-renderer.js";
-import { ProjectMediaStore, type ImportedProjectVisualMedia } from "./project-media-store.js";
+import { type ImportedProjectVisualMedia, ProjectMediaStore } from "./project-media-store.js";
 
 function expectedMedia(media: ImportedProjectVisualMedia): RegisteredVisualMedia {
   if (media.mediaKind === "video") {
