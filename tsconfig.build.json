@@ -16,6 +16,7 @@
     "mcp/handlers.ts",
     "mcp/schemas.ts",
     "mcp/session-store-service.ts",
+    "mcp/session-store-project-ops.ts",
     "mcp/types.ts",
     "src/contracts/**/*.ts",
     "src/manifest/**/*.ts",

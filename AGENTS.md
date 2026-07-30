@@ -17,7 +17,7 @@ Build an open-source Codex plugin and local TypeScript runtime for making profes
 - Work red-green-refactor: add a failing behavioral test, make the smallest implementation pass it, then refactor with tests green.
 - Keep capture and rendering deterministic. Model output may create a versioned manifest, but it must not be the only record of actions or quality evidence.
 - Validate a visible result after each browser action; a click or tool success alone is not a completed shot.
-- Use strict TypeScript, Biome, Vitest, and the repository scripts. Run the narrowest relevant checks before expanding to `pnpm run check`.
+- Use strict TypeScript, Biome, Vitest, and the repository scripts. Run the narrowest relevant checks before expanding to `npm run check`.
 - Avoid implementing product modules until their public contract and tests are agreed. Do not add mock-only capabilities to public claims.
 
 ## Repository hygiene
