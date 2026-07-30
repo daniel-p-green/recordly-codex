@@ -2,6 +2,7 @@ import { createHash, randomUUID } from "node:crypto";
 import { constants } from "node:fs";
 import { link, lstat, mkdir, open, realpath, unlink } from "node:fs/promises";
 import { basename, extname, isAbsolute, relative, resolve } from "node:path";
+import { isContainedPath } from "../safe/path.js";
 
 const MAX_IMPORT_BYTES = 512 * 1024 * 1024;
 const MAX_METADATA_BYTES = 2048;
@@ -42,11 +43,6 @@ export type PrivateMediaLibrary = {
 
 type StoredMediaMetadata = Omit<ImportedMedia, "mediaId"> & { schemaVersion: 1 };
 
-function contained(root: string, path: string): boolean {
-  const value = relative(root, path);
-  return value.length > 0 && !value.startsWith("..") && !value.startsWith("/");
-}
-
 function fail(message: string): never {
   throw new RangeError(`private media library: ${message}`);
 }
@@ -70,7 +66,7 @@ async function canonicalDirectory(
 
 async function privateChildDirectory(root: string, name: string): Promise<string> {
   const candidate = resolve(root, name);
-  if (!contained(root, candidate)) fail("library child escaped its root");
+  if (!isContainedPath(root, candidate)) fail("library child escaped its root");
   await mkdir(candidate, { mode: 0o700 }).catch((error: unknown) => {
     const code =
       error !== null && typeof error === "object" && "code" in error
@@ -83,7 +79,7 @@ async function privateChildDirectory(root: string, name: string): Promise<string
     fail("library child must be a private non-symlink directory");
   }
   const resolved = await realpath(candidate);
-  if (!contained(root, resolved)) fail("library child escaped its root");
+  if (!isContainedPath(root, resolved)) fail("library child escaped its root");
   return resolved;
 }
 
@@ -161,7 +157,7 @@ async function openedAuthorizedSource(input: {
   const relativePath = relativeSourcePath(input.relativePath);
   const segments = relativePath.split("/");
   const candidate = resolve(root, relativePath);
-  if (!contained(root, candidate)) fail("source path escaped authorizedRoot");
+  if (!isContainedPath(root, candidate)) fail("source path escaped authorizedRoot");
   const ancestors = [await sourceIdentity(root, "directory")];
   let ancestor = root;
   for (const segment of segments.slice(0, -1)) {
@@ -172,7 +168,7 @@ async function openedAuthorizedSource(input: {
   const initialStatus = await lstat(candidate);
   if (initialStatus.size > input.maximumBytes) fail("source file exceeds maximumBytes");
   const resolved = await realpath(candidate);
-  if (!contained(root, resolved)) fail("source path escaped authorizedRoot");
+  if (!isContainedPath(root, resolved)) fail("source path escaped authorizedRoot");
   await input.sourceOpenBarrier?.();
   const handle = await open(candidate, constants.O_RDONLY | constants.O_NOFOLLOW).catch(() =>
     fail("source file could not be opened safely"),
@@ -385,7 +381,7 @@ export async function createPrivateMediaLibrary(input: {
           : { sourceOpenBarrier: input.sourceOpenBarrier }),
       });
       const temporaryPath = resolve(objectsRoot, `.import-${randomUUID()}.tmp`);
-      if (!contained(objectsRoot, temporaryPath)) fail("temporary object escaped its root");
+      if (!isContainedPath(objectsRoot, temporaryPath)) fail("temporary object escaped its root");
       try {
         const copied = await copyAndHash(source.handle, temporaryPath, maximum);
         const expected: StoredMediaMetadata = {
@@ -397,11 +393,14 @@ export async function createPrivateMediaLibrary(input: {
         };
         const objectPath = resolve(objectsRoot, copied.sha256);
         const metadataPath = resolve(objectsRoot, `${copied.sha256}.json`);
-        if (!contained(objectsRoot, objectPath) || !contained(objectsRoot, metadataPath)) {
+        if (
+          !isContainedPath(objectsRoot, objectPath) ||
+          !isContainedPath(objectsRoot, metadataPath)
+        ) {
           fail("digest object escaped its root");
         }
         const metadataTemporaryPath = resolve(objectsRoot, `.metadata-${randomUUID()}.tmp`);
-        if (!contained(objectsRoot, metadataTemporaryPath))
+        if (!isContainedPath(objectsRoot, metadataTemporaryPath))
           fail("temporary metadata escaped its root");
         let objectPublished = false;
         let metadataPublished = false;

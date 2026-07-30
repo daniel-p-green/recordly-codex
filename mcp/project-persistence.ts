@@ -1,4 +1,5 @@
 // biome-ignore-all lint/complexity/useLiteralKeys: persisted project data is untrusted dictionary data.
+
 import { createHash, randomUUID } from "node:crypto";
 import {
   chmod,
@@ -14,6 +15,7 @@ import {
 import { isAbsolute, join, relative, resolve } from "node:path";
 import { canonicalJson } from "../src/manifest/index.js";
 import { type RecordingProject, validateRecordingProject } from "../src/project/index.js";
+import { isContainedPath } from "../src/safe/path.js";
 
 const DIRECTORY_MODE = 0o700;
 const FILE_MODE = 0o600;
@@ -40,11 +42,6 @@ type StoredEnvelope = {
 };
 
 type ProjectLock = { token: string };
-
-function contained(root: string, candidate: string): boolean {
-  const value = relative(root, candidate);
-  return value.length > 0 && !value.startsWith("..") && !isAbsolute(value);
-}
 
 function projectDigest(project: RecordingProject): string {
   return createHash("sha256").update(canonicalJson(project)).digest("hex");
@@ -164,7 +161,7 @@ export class RecordingProjectStore {
   private pathFor(projectId: string): string {
     safeProjectId(projectId);
     const candidate = resolve(this.projectsRoot(), `${projectId}.json`);
-    if (!contained(this.projectsRoot(), candidate))
+    if (!isContainedPath(this.projectsRoot(), candidate))
       throw new RangeError("project path escapes root");
     return candidate;
   }
@@ -228,7 +225,7 @@ export class RecordingProjectStore {
       throw new RangeError("project directory is not private");
     }
     const resolved = await realpath(projects);
-    if (!contained(rootResolved, resolved)) {
+    if (!isContainedPath(rootResolved, resolved)) {
       throw new RangeError("project directory escapes artifact root");
     }
     await chmod(resolved, DIRECTORY_MODE);
@@ -249,7 +246,7 @@ export class RecordingProjectStore {
     }
     const root = await realpath(this.projectsRoot());
     const resolved = await realpath(path);
-    if (!contained(root, resolved)) {
+    if (!isContainedPath(root, resolved)) {
       throw new RangeError("project path escapes storage root");
     }
   }

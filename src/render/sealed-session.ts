@@ -1,11 +1,12 @@
 // biome-ignore-all lint/complexity/useLiteralKeys: sealed evidence is an untrusted persisted boundary.
+
 import { createHash, randomUUID } from "node:crypto";
 import { lstat, mkdir, readFile, realpath, rename, rm, writeFile } from "node:fs/promises";
 import { isAbsolute, join, relative, resolve } from "node:path";
-
 import { validateRecordingRequest, validateSessionEvents } from "../contracts/index.js";
 import { probeRenderedVideo } from "../encoder/probe.js";
 import { canonicalJson } from "../manifest/index.js";
+import { isContainedPath } from "../safe/path.js";
 import {
   decodeSourceFrame,
   encodeSealedTimeline,
@@ -125,11 +126,6 @@ async function ownedDirectory(path: string, label: string): Promise<void> {
   }
 }
 
-function contained(root: string, path: string): boolean {
-  const relation = relative(root, path);
-  return relation.length > 0 && !relation.startsWith("..") && !isAbsolute(relation);
-}
-
 type VerifiedSessionTree = { root: string; realRoot: string };
 
 async function verifiedSessionTree(
@@ -142,7 +138,7 @@ async function verifiedSessionTree(
     realpath(artifactRoot),
     realpath(sessionRoot),
   ]);
-  if (!contained(realArtifactRoot, realSessionRoot)) {
+  if (!isContainedPath(realArtifactRoot, realSessionRoot)) {
     throw new SealedSessionRenderError("resolved session path escapes the artifact root");
   }
   return { root: sessionRoot, realRoot: realSessionRoot };
@@ -153,7 +149,7 @@ async function regularSessionFile(
   path: string,
   label: string,
 ): Promise<void> {
-  if (!contained(tree.root, path)) {
+  if (!isContainedPath(tree.root, path)) {
     throw new SealedSessionRenderError(`${label} escapes the sealed session`);
   }
   const segments = relative(tree.root, path).split("/");
@@ -166,7 +162,7 @@ async function regularSessionFile(
   const resolved = await realpath(path).catch(() => {
     throw new SealedSessionRenderError(`${label} is missing`);
   });
-  if (!contained(tree.realRoot, resolved)) {
+  if (!isContainedPath(tree.realRoot, resolved)) {
     throw new SealedSessionRenderError(`${label} resolved path escapes the verified session tree`);
   }
 }
@@ -293,7 +289,7 @@ async function readFrames(
       throw new SealedSessionRenderError(`capture event ${index + 1} is invalid`);
     }
     const absolutePath = resolve(tree.root, imagePath);
-    if (!contained(tree.root, absolutePath)) {
+    if (!isContainedPath(tree.root, absolutePath)) {
       throw new SealedSessionRenderError("capture frame path escapes the sealed session");
     }
     await regularSessionFile(tree, absolutePath, `capture frame ${frameId}`);
@@ -877,7 +873,7 @@ export async function renderSealedSession(input: {
   }
   const artifactRoot = resolve(input.artifactRoot);
   const sessionRoot = resolve(artifactRoot, input.sessionId);
-  if (!contained(artifactRoot, sessionRoot)) {
+  if (!isContainedPath(artifactRoot, sessionRoot)) {
     throw new SealedSessionRenderError("session path escapes the artifact root");
   }
   const tree = await verifiedSessionTree(artifactRoot, sessionRoot);

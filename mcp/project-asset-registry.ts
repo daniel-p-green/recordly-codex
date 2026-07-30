@@ -1,20 +1,22 @@
 // biome-ignore-all lint/complexity/useLiteralKeys: persisted asset registry data is untrusted dictionary data.
+
 import { randomUUID } from "node:crypto";
 import {
   chmod,
   link,
   lstat,
   mkdir,
-  readFile,
   readdir,
+  readFile,
   realpath,
   unlink,
   writeFile,
 } from "node:fs/promises";
 import { isAbsolute, join, relative, resolve } from "node:path";
+import { canonicalJson } from "../src/manifest/index.js";
 
 import type { RecordingProject } from "../src/project/index.js";
-import { canonicalJson } from "../src/manifest/index.js";
+import { isContainedPath } from "../src/safe/path.js";
 
 const identifier = /^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$/u;
 const digest = /^[a-f0-9]{64}$/u;
@@ -85,7 +87,7 @@ async function readLegacyEntries(input: {
     throw new RangeError("asset registry is not a private regular file");
   }
   const resolved = await realpath(input.registryPath);
-  if (!contained(input.root, resolved))
+  if (!isContainedPath(input.root, resolved))
     throw new RangeError("asset registry resolves outside root");
   const registry = object(JSON.parse(await readFile(resolved, "utf8")) as unknown);
   if (
@@ -104,7 +106,7 @@ async function journalRoot(input: {
   create: boolean;
 }): Promise<string | undefined> {
   const candidate = resolve(input.projectsRoot, `${input.projectId}.assets.d`);
-  if (!contained(input.projectsRoot, candidate))
+  if (!isContainedPath(input.projectsRoot, candidate))
     throw new RangeError("asset journal path escapes root");
   if (input.create)
     await mkdir(candidate, { mode: 0o700 }).catch((error) => {
@@ -121,7 +123,7 @@ async function journalRoot(input: {
     throw new RangeError("asset journal must be a private non-symlink directory");
   }
   const resolved = await realpath(candidate);
-  if (!contained(input.projectsRoot, resolved))
+  if (!isContainedPath(input.projectsRoot, resolved))
     throw new RangeError("asset journal resolves outside projects root");
   return resolved;
 }
@@ -163,7 +165,7 @@ async function readJournalEntries(input: {
   const entries: RegistryEntry[] = [];
   for (const child of children) {
     const path = resolve(root, child.name);
-    if (!contained(root, path)) throw new RangeError("asset journal entry escapes its root");
+    if (!isContainedPath(root, path)) throw new RangeError("asset journal entry escapes its root");
     if (child.name.startsWith(".") && child.name.endsWith(".tmp")) {
       const status = await lstat(path).catch((error) => {
         if (errorCode(error) === "ENOENT") return undefined;
@@ -208,7 +210,8 @@ export async function registerProjectAudioAsset(input: {
   await mkdir(projectsRoot, { recursive: true, mode: 0o700 });
   await chmod(projectsRoot, 0o700);
   const registryPath = resolve(projectsRoot, `${input.projectId}.assets.json`);
-  if (!contained(root, registryPath)) throw new RangeError("asset registry path escapes root");
+  if (!isContainedPath(root, registryPath))
+    throw new RangeError("asset registry path escapes root");
   const legacy = await readLegacyEntries({ root, registryPath, ownerToken: input.ownerToken });
   const existingJournal = await readJournalEntries({
     projectsRoot,
@@ -227,9 +230,10 @@ export async function registerProjectAudioAsset(input: {
   const assetsRoot = await journalRoot({ projectsRoot, projectId: input.projectId, create: true });
   if (assetsRoot === undefined) throw new RangeError("asset journal is unavailable");
   const entryPath = resolve(assetsRoot, `${input.assetId}.json`);
-  if (!contained(assetsRoot, entryPath)) throw new RangeError("asset journal entry escapes root");
+  if (!isContainedPath(assetsRoot, entryPath))
+    throw new RangeError("asset journal entry escapes root");
   const temporary = resolve(assetsRoot, `.${input.assetId}.${randomUUID()}.tmp`);
-  if (!contained(assetsRoot, temporary))
+  if (!isContainedPath(assetsRoot, temporary))
     throw new RangeError("asset journal temporary escapes root");
   const envelope = { schemaVersion: 1, ownerToken: input.ownerToken, entry: next };
   try {
@@ -246,11 +250,6 @@ export async function registerProjectAudioAsset(input: {
   } finally {
     await unlink(temporary).catch(() => undefined);
   }
-}
-
-function contained(root: string, candidate: string): boolean {
-  const value = relative(root, candidate);
-  return value.length > 0 && !value.startsWith("..") && !isAbsolute(value);
 }
 
 function object(value: unknown): Record<string, unknown> {
@@ -281,7 +280,8 @@ export async function loadProjectAssetRegistry(input: {
   );
   if (required.length === 0) return { assetRoot, assets: {} };
   const registryPath = resolve(root, "projects", `${input.project.projectId}.assets.json`);
-  if (!contained(root, registryPath)) throw new RangeError("asset registry path escapes root");
+  if (!isContainedPath(root, registryPath))
+    throw new RangeError("asset registry path escapes root");
   const projectsRoot = resolve(root, "projects");
   const entries = mergeEntries(
     await readLegacyEntries({ root, registryPath, ownerToken: input.ownerToken }),

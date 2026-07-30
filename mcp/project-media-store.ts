@@ -1,10 +1,11 @@
 // biome-ignore-all lint/complexity/useLiteralKeys: persisted private media records are untrusted data.
+
 import { randomUUID } from "node:crypto";
 import { chmod, link, lstat, mkdir, readFile, realpath, unlink, writeFile } from "node:fs/promises";
 import { isAbsolute, join, relative, resolve } from "node:path";
-
 import { canonicalJson } from "../src/manifest/index.js";
 import type { InspectedVisualMedia } from "../src/media/private-visual-raster.js";
+import { isContainedPath } from "../src/safe/path.js";
 
 const DIRECTORY_MODE = 0o700;
 const FILE_MODE = 0o600;
@@ -15,11 +16,6 @@ export type ImportedProjectVisualMedia = Pick<
   InspectedVisualMedia,
   "mediaId" | "sha256" | "mediaKind" | "extension" | "durationUs" | "width" | "height" | "fps"
 >;
-
-function contained(root: string, candidate: string): boolean {
-  const value = relative(root, candidate);
-  return value.length > 0 && !value.startsWith("..") && !isAbsolute(value);
-}
 
 function object(value: unknown): Record<string, unknown> {
   if (
@@ -126,7 +122,8 @@ export class ProjectMediaStore {
     }
     const root = await realpath(this.mediaRoot());
     const resolved = await realpath(path);
-    if (!contained(root, resolved)) throw new RangeError("private media record escapes storage");
+    if (!isContainedPath(root, resolved))
+      throw new RangeError("private media record escapes storage");
     const stored = object(JSON.parse(await readFile(resolved, "utf8")) as unknown);
     if (
       Object.keys(stored).length !== 3 ||
@@ -147,7 +144,7 @@ export class ProjectMediaStore {
 
   private pathFor(id: string): string {
     const path = resolve(this.mediaRoot(), `${id}.json`);
-    if (!contained(this.mediaRoot(), path))
+    if (!isContainedPath(this.mediaRoot(), path))
       throw new RangeError("private media path escapes storage");
     return path;
   }
@@ -166,7 +163,7 @@ export class ProjectMediaStore {
       throw new RangeError("private media directory is unsafe");
     }
     const resolved = await realpath(mediaRoot);
-    if (!contained(artifactRoot, resolved))
+    if (!isContainedPath(artifactRoot, resolved))
       throw new RangeError("private media directory escapes root");
   }
 }
