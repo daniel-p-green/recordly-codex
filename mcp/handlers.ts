@@ -3,6 +3,7 @@ import {
   validateRecordingProfileReference,
   validateRecordingProject,
 } from "../src/project/index.js";
+import { isContainedAbsoluteChild } from "../src/safe/path.js";
 import type { PreviewInspection } from "./preview-inspection.js";
 import type {
   ApplyAcceptedEditorialProposalInput,
@@ -165,23 +166,6 @@ export class RecordingServiceUnavailableError extends Error {
   }
 }
 
-function containedAbsolutePath(root: string, value: string): boolean {
-  if (
-    !root.startsWith("/") ||
-    root === "/" ||
-    root.includes("\\") ||
-    root.includes("..") ||
-    value.includes("\\")
-  ) {
-    return false;
-  }
-  if (!value.startsWith(`${root}/`) || value.includes("..")) return false;
-  return value
-    .split("/")
-    .slice(1)
-    .every((segment) => segment.length > 0 && segment !== ".");
-}
-
 function safeSession(view: RecordingSessionView): SessionOutput {
   if (
     !/^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$/u.test(view.sessionId) ||
@@ -192,9 +176,9 @@ function safeSession(view: RecordingSessionView): SessionOutput {
     throw new Error("service returned an invalid session view");
   }
   if (
-    !containedAbsolutePath(view.artifactRoot, view.captureConfigPath) ||
+    !isContainedAbsoluteChild(view.artifactRoot, view.captureConfigPath) ||
     ![view.browserStartHelperPath, view.browserStopHelperPath].every((path) =>
-      containedAbsolutePath(view.browserHelperRoot, path),
+      isContainedAbsoluteChild(view.browserHelperRoot, path),
     )
   ) {
     throw new Error("service returned an unsafe artifact path");
@@ -204,7 +188,7 @@ function safeSession(view: RecordingSessionView): SessionOutput {
   if (
     hasDelivery &&
     (!deliveryPaths.every((path) => typeof path === "string") ||
-      !deliveryPaths.every((path) => containedAbsolutePath(view.artifactRoot, path)) ||
+      !deliveryPaths.every((path) => isContainedAbsoluteChild(view.artifactRoot, path)) ||
       view.artifactPaths.length !== deliveryPaths.length ||
       view.artifactPaths.some((path, index) => path !== deliveryPaths[index]))
   ) {
@@ -220,7 +204,7 @@ function safeSession(view: RecordingSessionView): SessionOutput {
     browserStopHelperPath: view.browserStopHelperPath,
     captureConfigPath: view.captureConfigPath,
     artifactPaths: view.artifactPaths.filter((path) =>
-      containedAbsolutePath(view.artifactRoot, path),
+      isContainedAbsoluteChild(view.artifactRoot, path),
     ),
   };
   const capture = view.capture;

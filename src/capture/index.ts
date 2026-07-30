@@ -106,8 +106,12 @@ function defaultDegradedScreencast(): Record<string, unknown> {
 }
 
 /**
- * Browser CDP intake with a bounded, single-writer queue. The store owns persistence;
- * this adapter owns command order, receipt timing, and the ACK-after-durable-write rule.
+ * Library CDP screencast adapter with a bounded, single-writer queue.
+ *
+ * Production Codex Desktop Browser capture uses the generated helper + loopback
+ * broker path (`mcp/browser-helper.ts` → `mcp/capture-broker.ts`), not this class.
+ * Keep `CaptureAdapter` for unit-tested CDP intake rules and for hosts that inject
+ * a `CdpTransport` directly. Do not treat it as the shipped Browser capture surface.
  */
 export class CaptureAdapter {
   private state: CaptureState = "idle";

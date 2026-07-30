@@ -13,6 +13,7 @@ export default defineConfig({
         "src/capture/index.ts": { lines: 80, branches: 80 },
         "src/compiler/compile-recording.ts": { lines: 80, branches: 80 },
         "src/manifest/canonical-json.ts": { lines: 80, branches: 80 },
+        "src/safe/**/*.ts": { lines: 80, branches: 80 },
         "src/timeline/**/*.ts": { lines: 80, branches: 80 },
       },
     },
