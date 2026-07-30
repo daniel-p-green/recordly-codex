@@ -1,7 +1,9 @@
 import { createHash } from "node:crypto";
 import { constants } from "node:fs";
 import { chmod, lstat, open, realpath, unlink } from "node:fs/promises";
-import { isAbsolute, join, relative, resolve } from "node:path";
+import { isAbsolute, join, resolve } from "node:path";
+
+import { isContainedPath, isSafeRelativePath } from "../src/safe/path.js";
 
 const FILE_MODE = 0o600;
 const CHUNK_BYTES = 64 * 1024;
@@ -30,11 +32,6 @@ export type PrivateArtifactInput = {
   openBarrier?: () => Promise<void>;
 };
 
-function contained(root: string, candidate: string): boolean {
-  const value = relative(root, candidate);
-  return value.length > 0 && !value.startsWith("..") && !isAbsolute(value);
-}
-
 function sameIdentity(left: FileIdentity, right: FileIdentity): boolean {
   return left.dev === right.dev && left.ino === right.ino && left.size === right.size;
 }
@@ -43,22 +40,13 @@ function identity(status: { dev: number; ino: number; size: number }): FileIdent
   return { dev: status.dev, ino: status.ino, size: status.size };
 }
 
-function safeRelativePath(value: string): boolean {
-  return (
-    value.length > 0 &&
-    !isAbsolute(value) &&
-    !value.includes("\\") &&
-    value.split("/").every((part) => part.length > 0 && part !== "." && part !== "..")
-  );
-}
-
 async function privateDirectory(path: string, root: string, label: string): Promise<string> {
   const status = await lstat(path);
   if (!status.isDirectory() || status.isSymbolicLink() || (status.mode & 0o077) !== 0) {
     throw new RangeError(`${label} must be a private non-symlink directory`);
   }
   const resolved = await realpath(path);
-  if (path !== root && !contained(root, resolved)) {
+  if (path !== root && !isContainedPath(root, resolved)) {
     throw new RangeError(`${label} escapes private artifact root`);
   }
   return resolved;
@@ -95,7 +83,7 @@ async function openPrivateArtifact(input: PrivateArtifactInput) {
   if (
     !isAbsolute(input.root) ||
     input.root === "/" ||
-    !safeRelativePath(input.relativePath) ||
+    !isSafeRelativePath(input.relativePath) ||
     !Number.isSafeInteger(input.maximumBytes) ||
     input.maximumBytes < 1 ||
     (input.expectedSha256 !== undefined && !sha256Pattern.test(input.expectedSha256))
@@ -106,7 +94,7 @@ async function openPrivateArtifact(input: PrivateArtifactInput) {
   const rootIdentity = await privateDirectoryIdentity(root, root, "artifact root");
   const rootResolved = await realpath(root);
   const path = resolve(rootResolved, input.relativePath);
-  if (!contained(rootResolved, path)) throw new RangeError("private artifact escapes root");
+  if (!isContainedPath(rootResolved, path)) throw new RangeError("private artifact escapes root");
   let ancestor = rootResolved;
   const ancestors = [rootIdentity];
   for (const segment of input.relativePath.split("/").slice(0, -1)) {

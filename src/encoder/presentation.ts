@@ -2,6 +2,7 @@ import { createHash } from "node:crypto";
 import { constants } from "node:fs";
 import { lstat, mkdir, open, realpath, unlink } from "node:fs/promises";
 import { dirname, relative, resolve } from "node:path";
+import { isContainedPath } from "../safe/path.js";
 
 import { resolveMediaExecutable } from "./ffmpeg.js";
 import { MEDIA_PROCESS_POLICY, runMediaProcess } from "./media-process.js";
@@ -209,11 +210,6 @@ function waitForDrain(stream: NodeJS.WritableStream): Promise<void> {
   });
 }
 
-function contained(root: string, path: string): boolean {
-  const value = relative(root, path);
-  return value.length > 0 && !value.startsWith("..") && !value.startsWith("/");
-}
-
 /**
  * Copies one opened, bounded source file into an exclusive private snapshot
  * while hashing the exact bytes copied. Consumers must use only the returned
@@ -239,14 +235,14 @@ export async function stageVerifiedMediaAsset(input: {
   const root = await realpath(input.assetRoot);
   const stagingRoot = await realpath(input.stagingRoot);
   const candidate = resolve(root, input.relativePath);
-  if (!contained(root, candidate)) throw new RangeError("asset path escapes its root");
+  if (!isContainedPath(root, candidate)) throw new RangeError("asset path escapes its root");
   const info = await lstat(candidate);
   if (!info.isFile() || info.isSymbolicLink())
     throw new RangeError("asset must be a regular non-symlink file");
   const resolved = await realpath(candidate);
-  if (!contained(root, resolved)) throw new RangeError("asset path escapes its root");
+  if (!isContainedPath(root, resolved)) throw new RangeError("asset path escapes its root");
   const stagedPath = resolve(stagingRoot, input.stagingName);
-  if (!contained(stagingRoot, stagedPath))
+  if (!isContainedPath(stagingRoot, stagedPath))
     throw new RangeError("asset staging path escapes its root");
   const source = await open(resolved, constants.O_RDONLY | constants.O_NOFOLLOW);
   let destination: Awaited<ReturnType<typeof open>> | undefined;

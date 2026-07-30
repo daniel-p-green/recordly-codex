@@ -12,19 +12,14 @@ import {
   writeFile,
 } from "node:fs/promises";
 import { tmpdir } from "node:os";
-import { isAbsolute, join, relative, resolve } from "node:path";
-import {
-  applyAcceptedEditorialProposal as applyEditorialProposal,
-  buildEditorialProposal,
-  type EditorialProposal,
-} from "../src/analysis/index.js";
+import { join, resolve } from "node:path";
+import { applyAcceptedEditorialProposal as applyEditorialProposal } from "../src/analysis/index.js";
 
 import {
   type RecordingRequest,
   validateRecordingRequest,
   validateSessionEvent,
 } from "../src/contracts/index.js";
-import { canonicalJson } from "../src/manifest/index.js";
 import { createPrivateAudioNormalizer } from "../src/media/private-audio-normalization.js";
 import { createPrivateMediaLibrary } from "../src/media/private-media-library.js";
 import { createPrivateVisualRasterAdapter } from "../src/media/private-visual-raster.js";
@@ -32,27 +27,20 @@ import {
   applyRecordingProfile,
   builtInRecordingProfiles,
   profileSnapshotSha256,
-  type RecordingProject,
   reviseRecordingProject,
   validateRecordingProject,
 } from "../src/project/index.js";
 import { previewJudgmentDigests, previewJudgmentSummary } from "../src/project/preview-judgment.js";
 import { renderRecordingProject } from "../src/render/project-renderer.js";
 import { type RenderedSealedSession, renderSealedSession } from "../src/render/sealed-session.js";
+import { isContainedPath, isSafeAbsoluteRoot } from "../src/safe/path.js";
 import {
   type SessionFileSystem,
   type SessionInspection,
   SessionStore,
 } from "../src/session/index.js";
-import { browserStartHelper, browserStopHelper } from "./browser-helper.js";
-import {
-  type CaptureBroker,
-  createCaptureBroker,
-  DEFAULT_CAPTURE_BUDGET,
-} from "./capture-broker.js";
 import { RecordingServiceUnavailableError } from "./handlers.js";
 import { inspectPrivatePreview } from "./preview-inspection.js";
-import { digestPrivateArtifact } from "./private-artifact.js";
 import { loadProjectAssetRegistry, registerProjectAudioAsset } from "./project-asset-registry.js";
 import { ProjectMediaStore } from "./project-media-store.js";
 import { RecordingProjectStore } from "./project-persistence.js";
@@ -60,16 +48,34 @@ import { PreviewJudgmentStore } from "./project-preview-judgment-store.js";
 import {
   createVerifiedCaptureSource,
   readSourceKeyedCapturePresentationEvidence,
-  readVerifiedCaptureEditorialEvidence,
 } from "./project-render-source.js";
 import { resolveProjectVisualSources } from "./project-visual-resolver.js";
 import { RecordingProfileStore } from "./recording-profile-store.js";
 import { createRenderPublication, publishThenCompareAndSwap } from "./render-publication.js";
+import {
+  activeCaptureBrokers,
+  captureBrokerKey,
+  captureBudget,
+  createSessionBroker,
+  currentCaptureStatus,
+  ensureBroker,
+} from "./session-store-broker.js";
+import {
+  approvedSealedDeliveryManifest,
+  canonicalEditorialProposal,
+  inspectedPreviewJudgment,
+  manifestProjectSource,
+  previewArtifactDigest,
+  previewArtifactRelativePath,
+  profileSummary,
+  projectView,
+  resolveCanonicalProfile,
+} from "./session-store-project-ops.js";
+
 import type {
   CaptureBudget,
   CaptureStatus,
   RecordingMcpService,
-  RecordingProjectView,
   RecordingSessionView,
   SemanticBrowserEvent,
 } from "./types.js";
@@ -79,7 +85,6 @@ const FILE_MODE = 0o600;
 const ownerTokenName = ".recordly-codex-owner-token";
 const sessionLocks = new Map<string, Promise<void>>();
 const projectLocks = new Map<string, Promise<void>>();
-const activeCaptureBrokers = new Map<string, CaptureBroker>();
 
 type SessionStoreServiceOptions = {
   artifactRoot?: string;
@@ -94,17 +99,6 @@ type ServiceContext = {
   ownerToken: string;
   store: SessionStore;
   clockUs: () => number;
-};
-
-type BrokerState = {
-  schemaVersion: 1;
-  sessionId: string;
-  origin: string;
-  phase: "ready" | "claimed" | "running" | "stopped" | "failed";
-  budget: CaptureBudget;
-  acceptedFrames: number;
-  acceptedBytes: number;
-  reason?: "budget_exceeded";
 };
 
 function nodeFileSystem(): SessionFileSystem {
@@ -147,42 +141,10 @@ function isAlreadyExists(error: unknown): boolean {
 }
 
 function validArtifactRoot(value: string): string {
-  if (!isAbsolute(value) || value === "/" || value.includes("\\") || value.includes("..")) {
+  if (!isSafeAbsoluteRoot(value)) {
     throw new RecordingServiceUnavailableError();
   }
   return resolve(value);
-}
-
-function captureBudget(input: Partial<CaptureBudget> = {}): CaptureBudget {
-  const budget = {
-    maxCaptureSeconds: input.maxCaptureSeconds ?? DEFAULT_CAPTURE_BUDGET.maxCaptureSeconds,
-    maxAcceptedFrames: input.maxAcceptedFrames ?? DEFAULT_CAPTURE_BUDGET.maxAcceptedFrames,
-    maxAcceptedBytes: input.maxAcceptedBytes ?? DEFAULT_CAPTURE_BUDGET.maxAcceptedBytes,
-  };
-  if (
-    !Number.isSafeInteger(budget.maxCaptureSeconds) ||
-    budget.maxCaptureSeconds < 1 ||
-    budget.maxCaptureSeconds > 300 ||
-    !Number.isSafeInteger(budget.maxAcceptedFrames) ||
-    budget.maxAcceptedFrames < 1 ||
-    budget.maxAcceptedFrames > 9_000 ||
-    !Number.isSafeInteger(budget.maxAcceptedBytes) ||
-    budget.maxAcceptedBytes < 1 ||
-    budget.maxAcceptedBytes > 512 * 1024 * 1024
-  ) {
-    throw new RecordingServiceUnavailableError();
-  }
-  return budget;
-}
-
-function captureStatus(state: BrokerState): CaptureStatus {
-  return {
-    phase: state.phase,
-    ...state.budget,
-    acceptedFrames: state.acceptedFrames,
-    acceptedBytes: state.acceptedBytes,
-    ...(state.reason === undefined ? {} : { reason: state.reason }),
-  };
 }
 
 function defaultArtifactRoot(): string {
@@ -227,9 +189,11 @@ async function readOrCreateOwnerToken(artifactRoot: string): Promise<string> {
 }
 
 function containedArtifactPath(root: string, value: string): boolean {
-  if (!isAbsolute(value) || value.includes("\\") || value.includes("..")) return false;
-  const relation = relative(root, value);
-  return relation.length > 0 && !relation.startsWith("..") && !isAbsolute(relation);
+  return isContainedPath(root, value);
+}
+
+function digestBytes(content: string | Buffer): string {
+  return createHash("sha256").update(content).digest("hex");
 }
 
 function artifactPaths(inspection: SessionInspection): string[] {
@@ -297,178 +261,6 @@ function sessionView(
   };
 }
 
-function captureBrokerKey(artifactRoot: string, sessionId: string): string {
-  return `${artifactRoot}:${sessionId}`;
-}
-
-function brokerStatePath(inspection: SessionInspection): string {
-  return join(inspection.paths.root, "broker-state.json");
-}
-
-async function writePrivateJson(path: string, value: BrokerState): Promise<void> {
-  const temporary = `${path}.${randomUUID()}.tmp`;
-  await writeFile(temporary, `${JSON.stringify(value)}\n`, { mode: FILE_MODE, flag: "wx" });
-  await rename(temporary, path);
-}
-
-async function readBrokerState(inspection: SessionInspection): Promise<BrokerState | undefined> {
-  try {
-    const value = JSON.parse(await readFile(brokerStatePath(inspection), "utf8")) as unknown;
-    if (
-      value === null ||
-      typeof value !== "object" ||
-      (value as Record<string, unknown>)["schemaVersion"] !== 1 ||
-      (value as Record<string, unknown>)["sessionId"] !== inspection.sessionId ||
-      typeof (value as Record<string, unknown>)["origin"] !== "string" ||
-      !["ready", "claimed", "running", "stopped", "failed"].includes(
-        String((value as Record<string, unknown>)["phase"]),
-      )
-    ) {
-      throw new RecordingServiceUnavailableError();
-    }
-    const legacy = value as Record<string, unknown>;
-    const budget = captureBudget(
-      legacy["budget"] !== null && typeof legacy["budget"] === "object"
-        ? (legacy["budget"] as Partial<CaptureBudget>)
-        : {},
-    );
-    const acceptedFrames = legacy["acceptedFrames"] ?? 0;
-    const acceptedBytes = legacy["acceptedBytes"] ?? 0;
-    if (
-      !Number.isSafeInteger(acceptedFrames) ||
-      (acceptedFrames as number) < 0 ||
-      !Number.isSafeInteger(acceptedBytes) ||
-      (acceptedBytes as number) < 0 ||
-      (legacy["reason"] !== undefined && legacy["reason"] !== "budget_exceeded")
-    ) {
-      throw new RecordingServiceUnavailableError();
-    }
-    return {
-      schemaVersion: 1,
-      sessionId: inspection.sessionId,
-      origin: legacy["origin"] as string,
-      phase: legacy["phase"] as BrokerState["phase"],
-      budget,
-      acceptedFrames: acceptedFrames as number,
-      acceptedBytes: acceptedBytes as number,
-      ...(legacy["reason"] === undefined ? {} : { reason: "budget_exceeded" }),
-    };
-  } catch (error) {
-    if (isNotFound(error)) return undefined;
-    throw error;
-  }
-}
-
-async function writeInterruptedSummary(
-  inspection: SessionInspection,
-  origin: string,
-): Promise<void> {
-  const path = inspection.paths.captureSummary;
-  try {
-    await lstat(path);
-    return;
-  } catch (error) {
-    if (!isNotFound(error)) throw error;
-  }
-  const temporary = `${path}.${randomUUID()}.tmp`;
-  await writeFile(
-    temporary,
-    `${JSON.stringify({ schemaVersion: 1, sessionId: inspection.sessionId, origin, status: "failed", receivedFrames: 0, acceptedFrames: 0, ackedFrames: 0, rejectedFrames: 0, degradationRequested: false, reason: "broker_interrupted" })}\n`,
-    { mode: FILE_MODE, flag: "wx" },
-  );
-  await rename(temporary, path);
-}
-
-async function writeBrowserHelper(path: string, content: string): Promise<void> {
-  const status = await lstat(path);
-  if (!status.isFile() || status.isSymbolicLink()) throw new RecordingServiceUnavailableError();
-  const temporary = `${path}.${randomUUID()}.tmp`;
-  await writeFile(temporary, content, { mode: FILE_MODE, flag: "wx" });
-  await rename(temporary, path);
-}
-
-async function startBroker(
-  artifactRoot: string,
-  inspection: SessionInspection,
-  state: BrokerState,
-): Promise<void> {
-  const statePath = brokerStatePath(inspection);
-  const broker = await createCaptureBroker({
-    sessionId: inspection.sessionId,
-    root: inspection.paths.root,
-    origin: state.origin,
-    ...state.budget,
-    onPhase: async (phase, capture) =>
-      writePrivateJson(statePath, {
-        ...state,
-        phase,
-        acceptedFrames: capture.acceptedFrames,
-        acceptedBytes: capture.acceptedBytes,
-        ...(capture.reason === undefined ? {} : { reason: capture.reason }),
-      }),
-  });
-  try {
-    const helperInput = {
-      sessionId: inspection.sessionId,
-      endpoint: broker.endpoint,
-      origin: state.origin,
-    };
-    await writeBrowserHelper(inspection.paths.startWrapper, browserStartHelper(helperInput));
-    await writeBrowserHelper(inspection.paths.stopWrapper, browserStopHelper(helperInput));
-    activeCaptureBrokers.set(captureBrokerKey(artifactRoot, inspection.sessionId), broker);
-  } catch (error) {
-    await broker.close().catch(() => undefined);
-    throw error;
-  }
-}
-
-async function createSessionBroker(
-  artifactRoot: string,
-  inspection: SessionInspection,
-  budget: CaptureBudget,
-): Promise<void> {
-  const request = validateRecordingRequest(
-    JSON.parse(await readFile(inspection.paths.request, "utf8")) as unknown,
-  );
-  const state: BrokerState = {
-    schemaVersion: 1,
-    sessionId: inspection.sessionId,
-    origin: new URL(request.url).origin,
-    phase: "ready",
-    budget,
-    acceptedFrames: 0,
-    acceptedBytes: 0,
-  };
-  await writePrivateJson(brokerStatePath(inspection), state);
-  await startBroker(artifactRoot, inspection, state);
-}
-
-async function ensureBroker(artifactRoot: string, inspection: SessionInspection): Promise<void> {
-  const key = captureBrokerKey(artifactRoot, inspection.sessionId);
-  if (activeCaptureBrokers.has(key)) return;
-  const state = await readBrokerState(inspection);
-  if (state === undefined || state.phase === "stopped") return;
-  if (state.phase === "ready") {
-    await startBroker(artifactRoot, inspection, state);
-    return;
-  }
-  if (state.phase === "claimed" || state.phase === "running") {
-    await writePrivateJson(brokerStatePath(inspection), { ...state, phase: "failed" });
-    await writeInterruptedSummary(inspection, state.origin);
-  }
-  throw new RecordingServiceUnavailableError();
-}
-
-async function currentCaptureStatus(
-  artifactRoot: string,
-  inspection: SessionInspection,
-): Promise<CaptureStatus | undefined> {
-  const live = activeCaptureBrokers.get(captureBrokerKey(artifactRoot, inspection.sessionId));
-  if (live !== undefined) return live.status();
-  const state = await readBrokerState(inspection);
-  return state === undefined ? undefined : captureStatus(state);
-}
-
 function generatedRequest(
   input: Parameters<RecordingMcpService["create"]>[0],
   requestIdValue: string,
@@ -487,303 +279,6 @@ function generatedRequest(
       maxAttempts: 2,
     },
   });
-}
-
-function sha256(content: string | Buffer): string {
-  return createHash("sha256").update(content).digest("hex");
-}
-
-async function approvedSealedDeliveryManifest(input: {
-  artifactRoot: string;
-  sessionId: string;
-}): Promise<{ manifestPath: string; manifest: unknown; manifestSha256: string }> {
-  const artifacts = join(input.artifactRoot, input.sessionId, "artifacts");
-  const manifestPath = join(artifacts, "recording-manifest.json");
-  const qualityPath = join(artifacts, "quality-report.json");
-  const videoPath = join(artifacts, "recording.mp4");
-  for (const path of [manifestPath, qualityPath, videoPath]) {
-    const status = await lstat(path);
-    if (!status.isFile() || status.isSymbolicLink() || (status.mode & 0o077) !== 0) {
-      throw new RecordingServiceUnavailableError();
-    }
-  }
-  const manifestText = await readFile(manifestPath, "utf8");
-  const quality = JSON.parse(await readFile(qualityPath, "utf8")) as Record<string, unknown>;
-  const timing = quality["timing"] as Record<string, unknown> | undefined;
-  const artifactHashes = quality["artifactHashes"] as Record<string, unknown> | undefined;
-  const manifest = JSON.parse(manifestText) as Record<string, unknown>;
-  const artifact = manifest["artifact"] as Record<string, unknown> | undefined;
-  if (
-    quality["schemaVersion"] !== 1 ||
-    quality["kind"] !== "recordly-codex-quality-report" ||
-    quality["status"] !== "approved" ||
-    timing?.["mode"] !== "broker-receipt-offsets" ||
-    timing?.["eligibleForApproval"] !== true ||
-    typeof artifactHashes?.["videoSha256"] !== "string" ||
-    typeof artifactHashes?.["manifestSha256"] !== "string" ||
-    artifact?.["file"] !== "recording.mp4" ||
-    artifact?.["sha256"] !== artifactHashes["videoSha256"] ||
-    sha256(manifestText) !== artifactHashes["manifestSha256"] ||
-    sha256(await readFile(videoPath)) !== artifactHashes["videoSha256"]
-  ) {
-    throw new RecordingServiceUnavailableError();
-  }
-  return { manifestPath, manifest, manifestSha256: sha256(manifestText) };
-}
-
-function manifestProjectSource(input: {
-  sessionId: string;
-  projectId: string;
-  automatedRevisionLimit: number;
-  manifest: unknown;
-  manifestSha256: string;
-}): RecordingProject {
-  if (
-    input.manifest === null ||
-    typeof input.manifest !== "object" ||
-    Array.isArray(input.manifest)
-  ) {
-    throw new RecordingServiceUnavailableError();
-  }
-  const manifest = input.manifest as Record<string, unknown>;
-  const source = manifest["source"];
-  const timeline = manifest["timeline"];
-  if (
-    manifest["schemaVersion"] !== 1 ||
-    manifest["kind"] !== "recordly-codex-delivery" ||
-    manifest["sessionId"] !== input.sessionId ||
-    source === null ||
-    typeof source !== "object" ||
-    Array.isArray(source) ||
-    timeline === null ||
-    typeof timeline !== "object" ||
-    Array.isArray(timeline)
-  ) {
-    throw new RecordingServiceUnavailableError();
-  }
-  const sourceValue = source as Record<string, unknown>;
-  const timelineValue = timeline as Record<string, unknown>;
-  const cursorEvidence = manifest["cursorTrack"];
-  const actionEvidence = manifest["observedActions"];
-  const width = sourceValue["width"];
-  const height = sourceValue["height"];
-  const frameSetSha256 = sourceValue["aggregateSha256"];
-  const durationUs = timelineValue["durationUs"];
-  if (
-    !Number.isSafeInteger(width) ||
-    !Number.isSafeInteger(height) ||
-    !Number.isSafeInteger(durationUs) ||
-    (width as number) < 1 ||
-    (height as number) < 1 ||
-    (durationUs as number) < 1 ||
-    typeof frameSetSha256 !== "string" ||
-    !/^[a-f0-9]{64}$/iu.test(frameSetSha256) ||
-    (cursorEvidence !== undefined && !Array.isArray(cursorEvidence)) ||
-    !Array.isArray(actionEvidence)
-  ) {
-    throw new RecordingServiceUnavailableError();
-  }
-  const captureId = `capture-${sha256(input.sessionId).slice(0, 24)}`;
-  return validateRecordingProject({
-    schemaVersion: 1,
-    projectId: input.projectId,
-    revision: 0,
-    revisionPolicy: {
-      automatedRevisionLimit: input.automatedRevisionLimit,
-      automatedRevisionCount: 0,
-    },
-    captureSources: [
-      {
-        id: captureId,
-        sessionId: input.sessionId,
-        manifestSha256: input.manifestSha256,
-        timelineSha256: sha256(canonicalJson(timelineValue)),
-        frameSetSha256,
-        sourceWidth: width,
-        sourceHeight: height,
-        durationUs,
-      },
-    ],
-    output: {
-      profile: "landscape-1080p",
-      width: 1920,
-      height: 1080,
-      fps: 30,
-      format: "mp4",
-      quality: "high",
-    },
-    timeline: {
-      clips: [
-        {
-          id: `clip-${sha256(input.sessionId).slice(0, 24)}`,
-          sourceId: captureId,
-          trim: { startUs: 0, endUs: durationUs },
-          speedRegions: [],
-          zoomRegions: [],
-          transitionAfter: { kind: "cut", durationUs: 0 },
-        },
-      ],
-    },
-    presentation: {
-      cursor: {
-        visible: Array.isArray(cursorEvidence) && cursorEvidence.length > 0,
-        preset: "system",
-        sizePx: 28,
-        motion: "smoothed",
-        clickEffect: actionEvidence.some(
-          (event) =>
-            event !== null &&
-            typeof event === "object" &&
-            (event as { type?: unknown }).type === "click",
-        )
-          ? "ripple"
-          : "none",
-      },
-      frame: {
-        background: { kind: "gradient", startColor: "#111827", endColor: "#312e81" },
-        paddingPx: 40,
-        radiusPx: 24,
-        shadow: "soft",
-      },
-    },
-    overlays: { annotations: [], captions: [] },
-    audioTracks: [],
-    pipTracks: [],
-    renderHooks: [],
-    preview: { status: "not-requested" },
-  });
-}
-
-function projectView(
-  project: RecordingProject,
-  projectSha256: string,
-  judgment?: RecordingProjectView["previewJudgment"],
-): RecordingProjectView {
-  return {
-    project,
-    projectSha256,
-    ...(judgment === undefined ? {} : { previewJudgment: judgment }),
-  };
-}
-
-async function canonicalEditorialProposal(
-  artifactRoot: string,
-  project: RecordingProject,
-): Promise<EditorialProposal> {
-  if (project.schemaVersion !== 2) throw new RecordingServiceUnavailableError();
-  const evidence = await Promise.all(
-    project.captureSources.map((source) =>
-      readVerifiedCaptureEditorialEvidence({ artifactRoot, source }),
-    ),
-  );
-  const observedEvents = evidence
-    .flatMap((entry) => entry.observedEvents)
-    .sort(
-      (left, right) =>
-        left.sourceId.localeCompare(right.sourceId) ||
-        left.tUs - right.tUs ||
-        left.id.localeCompare(right.id),
-    )
-    .slice(0, 2_048);
-  return buildEditorialProposal({
-    schemaVersion: 1,
-    project,
-    observedEvents,
-    deadTimeBySource: project.captureSources.map((source, index) => ({
-      sourceId: source.id,
-      analysis: (
-        evidence[index] as Awaited<ReturnType<typeof readVerifiedCaptureEditorialEvidence>>
-      ).deadTime,
-    })),
-  });
-}
-
-function profileSummary(profile: {
-  source: "builtin" | "owner-local";
-  profileId: string;
-  profileRevision: number;
-  snapshotSha256: string;
-}): {
-  source: "builtin" | "owner-local";
-  profileId: string;
-  profileRevision: number;
-  snapshotSha256: string;
-} {
-  return {
-    source: profile.source,
-    profileId: profile.profileId,
-    profileRevision: profile.profileRevision,
-    snapshotSha256: profile.snapshotSha256,
-  };
-}
-
-async function resolveCanonicalProfile(
-  artifactRoot: string,
-  ownerToken: string,
-  locator: {
-    source: "builtin" | "owner-local";
-    profileId: string;
-    profileRevision?: number;
-    snapshotSha256?: string;
-  },
-) {
-  const profile =
-    locator.source === "builtin"
-      ? builtInRecordingProfiles().find((candidate) => candidate.profileId === locator.profileId)
-      : await new RecordingProfileStore(artifactRoot, ownerToken).load(locator.profileId);
-  if (profile === undefined || profile.source !== locator.source)
-    throw new RecordingServiceUnavailableError();
-  if (
-    (locator.profileRevision !== undefined &&
-      profile.profileRevision !== locator.profileRevision) ||
-    (locator.snapshotSha256 !== undefined &&
-      profile.snapshotSha256 !== locator.snapshotSha256.toLowerCase())
-  ) {
-    throw new RecordingServiceUnavailableError();
-  }
-  return profile;
-}
-
-async function previewArtifactDigest(
-  artifactRoot: string,
-  project: RecordingProject,
-): Promise<string> {
-  return (
-    await digestPrivateArtifact({
-      root: artifactRoot,
-      relativePath: previewArtifactRelativePath(project),
-      maximumBytes: 512 * 1024 * 1024,
-    })
-  ).sha256;
-}
-
-function previewArtifactRelativePath(project: RecordingProject): string {
-  return `projects/renders/${project.projectId}-r${project.revision}-preview.${project.output.format}`;
-}
-
-async function inspectedPreviewJudgment(
-  artifactRoot: string,
-  ownerToken: string,
-  project: RecordingProject,
-): Promise<RecordingProjectView["previewJudgment"]> {
-  const judgment = await new PreviewJudgmentStore(artifactRoot, ownerToken).load(
-    project.projectId,
-    project.revision,
-  );
-  if (judgment === undefined) return undefined;
-  const summary = previewJudgmentSummary(judgment, project);
-  try {
-    const digests = previewJudgmentDigests(project);
-    const artifactDigest = await previewArtifactDigest(artifactRoot, project);
-    const current =
-      judgment.projectSha256 === digests.projectSha256 &&
-      judgment.renderInputSha256 === digests.renderInputSha256 &&
-      judgment.renderRecipeSha256 === digests.renderRecipeSha256 &&
-      judgment.previewArtifactSha256 === artifactDigest;
-    return { ...summary, status: current ? "current" : "stale" };
-  } catch {
-    return { ...summary, status: "stale" };
-  }
 }
 
 /** Local session persistence with browser helpers aligned to SessionStore's checked-in runtime contract. */
@@ -1283,7 +778,7 @@ export function createSessionStoreService(
             // Integrity verification happens in dispose; it must complete before publication.
             await visual.dispose();
           }
-          const artifactDigest = sha256(await readFile(publication.temporaryPath));
+          const artifactDigest = digestBytes(await readFile(publication.temporaryPath));
           const updated = validateRecordingProject({
             ...current.project,
             preview:

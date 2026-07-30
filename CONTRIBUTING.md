@@ -7,7 +7,7 @@ Thanks for contributing. Keep changes small, reviewable, and evidence-backed.
 1. Discuss a materially new capability in an issue first, especially anything involving browser permissions, credentials, capture, rendering, licensing, or telemetry.
 2. Add a failing behavioral test before its implementation, then keep the implementation minimal until the test passes.
 3. Use only sanitized fixtures. Do not commit recordings, frame streams, cookies, tokens, customer URLs, or captured personal data.
-4. Run `pnpm run check` and `pnpm run plugin:validate`.
+4. Run `npm run check` and `npm run plugin:validate`.
 5. State the user-visible behavior, safety boundaries, verification evidence, and any limitation in the pull request.
 
 ## Design expectations

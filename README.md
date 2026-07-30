@@ -67,7 +67,7 @@ The normal flow is:
 
 MP4 and GIF output are supported. GIF has no audio. Built-in profiles cover 1920×1080 landscape, 1080×1080 square, and 1080×1920 vertical output with draft, standard, and high quality settings. The output-parity fixture suite renders preview and final in both MP4 and GIF at all three geometries and decodes declared checkpoints. That is fixture proof, not pixel identity with Recordly or proof of all real-world workflows.
 
-See [the capability matrix](docs/capability-matrix.md), [architecture](docs/architecture.md), and [output-parity contract](docs/output-parity-v1.md) for the exact boundaries.
+See [the capability matrix](docs/capability-matrix.md), [architecture](docs/architecture.md), [MCP protocol v0.5](docs/mcp-protocol-v0.5.md), and [output-parity contract](docs/output-parity-v1.md) for the exact boundaries.
 
 ## Intentionally narrower than Recordly
 

@@ -11,12 +11,12 @@ import {
   writeFile,
 } from "node:fs/promises";
 import { isAbsolute, join, relative, resolve } from "node:path";
-
 import { canonicalJson } from "../src/manifest/index.js";
 import {
   type RecordingProfileReference,
   validateRecordingProfileReference,
 } from "../src/project/index.js";
+import { isContainedPath } from "../src/safe/path.js";
 
 const DIRECTORY_MODE = 0o700;
 const FILE_MODE = 0o600;
@@ -37,11 +37,6 @@ export type ExpectedRecordingProfileVersion = {
 
 type Envelope = { schemaVersion: 1; ownerToken: string; profile: RecordingProfileReference };
 type Lock = { token: string };
-
-function contained(root: string, candidate: string): boolean {
-  const value = relative(root, candidate);
-  return value.length > 0 && !value.startsWith("..") && !isAbsolute(value);
-}
 
 function isAlreadyExists(error: unknown): boolean {
   return (
@@ -182,7 +177,7 @@ export class RecordingProfileStore {
   private pathFor(profileId: string): string {
     safeProfileId(profileId);
     const candidate = resolve(this.profilesRoot(), `${profileId}.json`);
-    if (!contained(this.profilesRoot(), candidate))
+    if (!isContainedPath(this.profilesRoot(), candidate))
       throw new RangeError("profile path escapes root");
     return candidate;
   }
@@ -256,7 +251,7 @@ export class RecordingProfileStore {
     const status = await lstat(profiles);
     if (!status.isDirectory() || status.isSymbolicLink() || (status.mode & 0o077) !== 0)
       throw new RangeError("profile directory is not private");
-    if (!contained(artifactRoot, await realpath(profiles)))
+    if (!isContainedPath(artifactRoot, await realpath(profiles)))
       throw new RangeError("profile directory escapes artifact root");
   }
 
@@ -264,7 +259,7 @@ export class RecordingProfileStore {
     const status = await lstat(path);
     if (!status.isFile() || status.isSymbolicLink() || (status.mode & 0o077) !== 0)
       throw new RangeError("profile must be a private regular file");
-    if (!contained(await realpath(this.profilesRoot()), await realpath(path)))
+    if (!isContainedPath(await realpath(this.profilesRoot()), await realpath(path)))
       throw new RangeError("profile path escapes storage root");
   }
 

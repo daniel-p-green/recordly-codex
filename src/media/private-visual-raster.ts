@@ -3,9 +3,9 @@ import { createHash } from "node:crypto";
 import { constants } from "node:fs";
 import { lstat, open, realpath } from "node:fs/promises";
 import { isAbsolute, relative, resolve } from "node:path";
-
 import { resolveMediaExecutable } from "../encoder/ffmpeg.js";
 import type { LazyRasterSource, RasterFrame } from "../render/raster-compositor.js";
+import { isContainedPath } from "../safe/path.js";
 import type { ImportedMedia } from "./private-media-library.js";
 
 const MAX_OBJECT_BYTES = 512 * 1024 * 1024;
@@ -191,11 +191,6 @@ function fail(message: string): never {
   throw new RangeError(`private visual raster: ${message}`);
 }
 
-function contained(root: string, path: string): boolean {
-  const value = relative(root, path);
-  return value.length > 0 && !value.startsWith("..") && !value.startsWith("/");
-}
-
 function exactKeys(value: object, expected: readonly string[]): boolean {
   const keys = Object.keys(value);
   return keys.length === expected.length && keys.every((key) => expected.includes(key));
@@ -232,13 +227,13 @@ async function privateDirectory(path: string, label: string): Promise<string> {
 
 async function privateChild(root: string, name: string): Promise<string> {
   const path = resolve(root, name);
-  if (!contained(root, path)) fail("library objects escaped the root");
+  if (!isContainedPath(root, path)) fail("library objects escaped the root");
   const status = await lstat(path).catch(() => fail("library objects are unavailable"));
   if (status.isSymbolicLink() || !status.isDirectory() || !privateMode(status.mode)) {
     fail("library objects must be a private non-symlink directory");
   }
   const resolved = await realpath(path);
-  if (!contained(root, resolved)) fail("library objects escaped the root");
+  if (!isContainedPath(root, resolved)) fail("library objects escaped the root");
   return resolved;
 }
 
@@ -570,7 +565,7 @@ export async function createPrivateVisualRasterAdapter(input: {
     }
     const objectPath = resolve(objectsRoot, media.sha256);
     const metadataPath = resolve(objectsRoot, `${media.sha256}.json`);
-    if (!contained(objectsRoot, objectPath) || !contained(objectsRoot, metadataPath)) {
+    if (!isContainedPath(objectsRoot, objectPath) || !isContainedPath(objectsRoot, metadataPath)) {
       fail("media reference escaped library");
     }
     async function verifyStoredEvidence(): Promise<void> {

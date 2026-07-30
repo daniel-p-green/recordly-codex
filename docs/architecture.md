@@ -18,7 +18,9 @@ flowchart LR
   J --> F["Final render"]
 ```
 
-The Browser host runs the generated helper entrypoints. The local MCP service does not drive a CLI or IDE browser, capture a native display/window, or substitute a desktop recording application.
+The Browser host runs the generated helper entrypoints. The local MCP service does not drive a CLI or IDE browser, capture a native display/window, or substitute a desktop recording application. The library `CaptureAdapter` in `src/capture` is a unit-tested CDP intake helper for injected transports; it is not the shipped Desktop Browser capture path.
+
+Project and preview orchestration helpers live beside the MCP session service (`mcp/session-store-project-ops.ts`, `mcp/session-store-broker.ts`). Sealed delivery encoding helpers live in `src/render/sealed-session-encode.ts`. Shared path containment primitives live in `src/safe/`. Project schema validation primitives and section validators live in `src/project/validation-primitives.ts` and `src/project/project-sections.ts`. Browser helper generation is split into typed request/observer/source modules under `mcp/browser-helper-*.ts`.
 
 ## Capture contract
 
