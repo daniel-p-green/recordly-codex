@@ -1,0 +1,65 @@
+{
+  "schemaVersion": 1,
+  "candidateVersion": "1.0.0",
+  "compatibility": {
+    "unknownVersion": "fail-closed",
+    "rewriteOnRead": false,
+    "ownership": "artifact-root-owner-token"
+  },
+  "formats": [
+    {
+      "id": "session-metadata",
+      "envelopeVersions": [1],
+      "payloadVersions": [1],
+      "migration": "none"
+    },
+    {
+      "id": "capture-summary",
+      "envelopeVersions": [1],
+      "payloadVersions": [1],
+      "migration": "none"
+    },
+    {
+      "id": "capture-broker-state",
+      "envelopeVersions": [1],
+      "payloadVersions": [1],
+      "migration": "none"
+    },
+    {
+      "id": "recording-project",
+      "envelopeVersions": [1],
+      "payloadVersions": [1, 2],
+      "migration": "v1-to-v2-on-explicit-mutation"
+    },
+    {
+      "id": "recording-profile",
+      "envelopeVersions": [1],
+      "payloadVersions": [1],
+      "migration": "none"
+    },
+    {
+      "id": "preview-judgment",
+      "envelopeVersions": [1],
+      "payloadVersions": [1],
+      "migration": "none"
+    }
+  ],
+  "retention": {
+    "automaticExpiry": false,
+    "sessionDiscard": "explicit-owner-authorized",
+    "sessionDiscardRemoves": ["session-directory", "browser-helper-directory"],
+    "itemDeleteApis": {
+      "projects": false,
+      "profiles": false,
+      "previewJudgments": false
+    }
+  },
+  "interruptedCapture": {
+    "ready": "restart-broker",
+    "claimed": "mark-failed-broker-interrupted",
+    "running": "mark-failed-broker-interrupted",
+    "failed": "remain-failed",
+    "stopped": "remain-stopped",
+    "automaticRetry": false
+  }
+}

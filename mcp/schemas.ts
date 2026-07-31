@@ -238,12 +238,40 @@ export const sessionOutputSchema = z
           .max(512 * 1024 * 1024),
         acceptedFrames: z.number().int().nonnegative(),
         acceptedBytes: z.number().int().nonnegative(),
-        reason: z.literal("budget_exceeded").optional(),
+        reason: z
+          .enum([
+            "backpressure",
+            "broker_interrupted",
+            "budget_exceeded",
+            "browser_start_failed",
+            "durable_write_failed",
+            "incomplete_capture",
+            "invalid_broker_clock",
+            "malformed_frame",
+            "malformed_observed_event",
+            "observed_event_before_baseline",
+            "observed_event_delivery_failed",
+            "observed_event_flood",
+            "observed_event_persist_failed",
+            "observer_challenge_cap",
+          ])
+          .optional(),
       })
       .strict()
       .optional(),
   })
   .strict();
+
+const diagnosticReasonSchema = z.enum([
+  "backpressure",
+  "broker_interrupted",
+  "budget_exceeded",
+  "final_publication_failed",
+  "incomplete_capture",
+  "invalid_input",
+  "stale_preview_judgment",
+  "unsupported_state",
+]);
 
 const toolOperationSchema = z.enum([
   "create_recording_session",
@@ -570,7 +598,10 @@ export const failedToolOutputSchema = z
     ok: z.literal(false),
     operation: toolOperationSchema,
     error: z
-      .object({ code: z.enum(["invalid_input", "service_unavailable", "operation_failed"]) })
+      .object({
+        code: z.enum(["invalid_input", "service_unavailable", "operation_failed"]),
+        reason: diagnosticReasonSchema.optional(),
+      })
       .strict(),
   })
   .strict();
@@ -592,7 +623,10 @@ export const toolOutputSchema = z
     profile: recordingProfileOutputSchema.optional(),
     proposal: editorialProposalOutputSchema.optional(),
     error: z
-      .object({ code: z.enum(["invalid_input", "service_unavailable", "operation_failed"]) })
+      .object({
+        code: z.enum(["invalid_input", "service_unavailable", "operation_failed"]),
+        reason: diagnosticReasonSchema.optional(),
+      })
       .strict()
       .optional(),
   })

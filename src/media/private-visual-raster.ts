@@ -2,7 +2,7 @@ import { execFile, spawn } from "node:child_process";
 import { createHash } from "node:crypto";
 import { constants } from "node:fs";
 import { lstat, open, realpath } from "node:fs/promises";
-import { isAbsolute, relative, resolve } from "node:path";
+import { isAbsolute, resolve } from "node:path";
 import { resolveMediaExecutable } from "../encoder/ffmpeg.js";
 import type { LazyRasterSource, RasterFrame } from "../render/raster-compositor.js";
 import { isContainedPath } from "../safe/path.js";

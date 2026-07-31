@@ -1,7 +1,7 @@
 import { createHash, randomUUID } from "node:crypto";
 import { constants } from "node:fs";
 import { link, lstat, mkdir, open, realpath, unlink } from "node:fs/promises";
-import { basename, extname, isAbsolute, relative, resolve } from "node:path";
+import { basename, extname, isAbsolute, resolve } from "node:path";
 import { isContainedPath } from "../safe/path.js";
 
 const MAX_IMPORT_BYTES = 512 * 1024 * 1024;

@@ -21,12 +21,6 @@ artifacts/
 tmp/
 .playwright-mcp/
 
-# Finder / editor duplicate copies (never commit)
-**/* 2.*
-**/* 3.*
-**/* copy.*
-**/* Copy.*
-
 # Local environment and editor state
 .env
 .env.*

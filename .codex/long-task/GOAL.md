@@ -2,7 +2,7 @@
 
 ## Outcome
 
-Deliver and publicly release `recordly-codex` v0.5.0 as a reproducible Codex Desktop Browser plugin that turns an approved website URL and bounded objective into a professionally composed, evidence-backed recording without another visible recording app. Codex directs and judges the workflow while local deterministic code owns capture, media ingestion, composition, encoding, publication, and artifact verification.
+Release `recordly-codex` v1.0.0 only after 12/12 documented public acceptance runs pass, the actual Codex Desktop Browser path is verified, three consecutive Node 22/24 and plugin-contract CI runs are green, clean install/upgrade/uninstall/reinstall pass, release metadata and checksums agree, and no unresolved high-severity security or privacy finding remains.
 
 ## Constraints
 
@@ -12,6 +12,7 @@ Deliver and publicly release `recordly-codex` v0.5.0 as a reproducible Codex Des
 - Treat Recordly as an upstream reference, not a copy source. Do not incorporate AGPL-3.0 implementation or assets without a written license-compliance decision.
 - Use strict TypeScript, red-green-refactor for executable behavior, deterministic manifests, and evidence-backed quality gates.
 - Prefer a small vertical slice over a speculative editor clone. No native desktop app or hosted service is in the initial scope.
+- Preserve the current authorization and capability boundaries. Do not release, tag, or weaken a fail-closed gate to manufacture completion evidence.
 
 ## Evidence
 
@@ -42,6 +43,7 @@ Deliver and publicly release `recordly-codex` v0.5.0 as a reproducible Codex Des
 5. Validate installability in Codex Desktop, run a real approved-site demonstration, and publish a candid capability/limitation matrix. **Complete for v0.2.0:** protected-main merge, green main/tag CI, published release asset, pinned Git marketplace installation, installed stdio MCP smoke, headed authorized-site acceptance, professional-usability audit, security review, canonical package checks, and the candid capability/limitation matrix are verified.
 6. Release and validate v0.3.0. **Complete:** protected-main merge, green CI after infrastructure retry, public release, enabled installation, installed version and exact ten-tool smoke, matching bundle SHA, and authorized Codex Desktop Browser workflow are verified.
 7. Release and validate v0.5.0 near-output-parity workflow. **In progress:** V2 project/media/profile contracts, private visual and audio pipelines, professional mixing, preview judgment, decoded visual-media service rendering, capture budgets, tracked-file CI, and the clean-room output-parity fixture contract are implemented in the working tree. Executable parity, remaining MCP/editorial automation, independent release audit, live Browser acceptance, public tag/release, and clean-installed runtime proof remain open.
+8. Release and validate v1.0.0. **In progress:** the unreleased candidate metadata is aligned at `1.0.0`; the actual Desktop Browser path and one complete Node 22 static-click run are verified; the external privacy-safe ledger is `1/12`. The remaining acceptance runs, three consecutive CI sets, install lifecycle, final security/privacy review, and release integrity proof remain open.
 
 ## Done when
 
@@ -55,3 +57,8 @@ Deliver and publicly release `recordly-codex` v0.5.0 as a reproducible Codex Des
 - [ ] Imported visual and normalized audio media, recording profiles, preview judgment, bounded revision, and presentation controls are reachable through the shipped MCP/skill workflow and verified from the generated bundle.
 - [ ] The full tracked-source CI, security, compatibility, performance, and decoded professional-output gates pass from a clean release candidate.
 - [ ] v0.5.0 is merged to protected `main`, tagged and publicly released, clean-installed from the marketplace, raw-stdio smoked at the exact shipped tool/version surface, and accepted on one authorized live Codex Desktop Browser workflow.
+- [ ] The v1 acceptance ledger validates exactly 12 runs across all four workflow classes against one candidate bundle.
+- [ ] Three consecutive Node 22, Node 24, and plugin-contract CI sets are green on `main`.
+- [ ] Clean install, v0.5.0 upgrade, uninstall, and reinstall pass in an isolated Codex profile.
+- [ ] Release metadata, bundle and asset checksums, tag, protocol docs, capability matrix, and release notes agree.
+- [ ] No unresolved high-severity security or privacy finding remains, then and only then publish v1.0.0.

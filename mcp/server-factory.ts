@@ -39,7 +39,7 @@ const mutationAnnotations = {
 } as const;
 
 export function createRecordingMcpServer(service: RecordingMcpService): McpServer {
-  const server = new McpServer({ name: "recordly-codex-mcp-server", version: "0.5.0" });
+  const server = new McpServer({ name: "recordly-codex-mcp-server", version: "1.0.0" });
   const handlers = createRecordingToolHandlers(service);
   server.registerTool(
     "create_recording_session",

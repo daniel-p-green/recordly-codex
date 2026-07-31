@@ -89,3 +89,85 @@ Record meaningful milestones only. Keep entries concise and evidence-based.
 - QC corrections required and landed during review: immutable media-registry create semantics under conflict/concurrency; disposal-integrity before publication; profile-cap concurrency; operational profile defaults; GIF-with-audio rejection; primary-sidechain validity; decoded audio timing, fades, pan, ducking, recovery, and limiter behavior.
 - Next: Finish profile MCP wiring, make all output-parity fixtures executable through encode/decode, implement and verify V2 presentation controls, integrate normalized audio import, expose evidence-backed editorial analysis/zoom proposals, then run the complete release/security/live/install gates.
 - Open release risks: generated bundle and public documentation are stale at v0.3.0; the current branch is uncommitted; no v0.5.0 tag, CI, clean installation, raw installed smoke, or live Codex Desktop Browser acceptance has occurred.
+
+## 2026-07-29 — v1 candidate aligned and static-click repetition 1 passed
+
+- Outcome: Aligned the unreleased package, plugin, MCP server, lockfile, integrity contract, tests, and bundle at `1.0.0`; completed the first countable public acceptance run.
+- Verified: Node 22.23.1 preflight passed with FFmpeg/FFprobe 8.1.2 and exact 20-tool MCP handshake. Actual Codex Desktop Browser capture visibly completed the approved navigation, accepted and acknowledged 23/23 frames with zero rejections, and produced an approved seal. The preview passed decoded technical QA and visual contact-sheet judgment with a current accepted verdict. The final fully decoded and independently matched SHA-256 `2d0d2793cece6fef60b765e27adba2573662cd047dacfb781529c2090e2dcb61`.
+- Next: Complete static-click repetitions 2 and 3 against the same bundle, then the remaining three workflow classes.
+- Blocker or risk: Ledger is 1/12. CI, install lifecycle, and final security/privacy/release-integrity gates remain open; no tag or release is authorized yet.
+
+## 2026-07-29 — local v1 audit says keep candidate, block release
+
+- Outcome: Audited the post-Cursor working tree and kept the candidate implementation. No
+  high-confidence code defect or regression justified a rollback.
+- Verified: `npm run check`, plugin validation, strict partial-ledger validation, and the full
+  296-test coverage suite passed. Coverage is 80.23% branches and 89.23% lines. Supported
+  Node 22.23.1 and 24.18.0 self-checks passed with the exact 20-tool MCP handshake and bundle
+  SHA-256 `fd9cdfccf0b0473d41f6f0abe15bca39a8e7fbf183b680cc5236d6f9225cedec`.
+  Duplicate-copy and private-path/secret pattern sweeps found no tracked artifact requiring
+  rollback.
+- Next: Complete the remaining 11 live acceptance runs, regression cases, isolated install
+  lifecycle, three consecutive CI runs, and final security/release-integrity review.
+- Blocker or risk: `npm pack --dry-run` exposed a 205-file generic tarball containing internal
+  long-task logs and test/CI sources because npm fell back to `.gitignore`. Define an allowlisted
+  release archive before publication. The online npm advisory audit was not run because it would
+  disclose the dependency graph to an external service without separate authorization.
+
+## 2026-07-30 — static-click acceptance class completed at 3/12
+
+- Outcome: Completed static-click repetitions 2 and 3 through the actual Codex Desktop Browser,
+  closing the first workflow class at three consecutive passing runs.
+- Verified: Both runs used candidate `1.0.0`, bundle SHA-256
+  `fd9cdfccf0b0473d41f6f0abe15bca39a8e7fbf183b680cc5236d6f9225cedec`, Node
+  24.18.0, FFmpeg/FFprobe 8.1.2, macOS 26.5.2 arm64, and Codex Beta 26.715.31251.
+  Repetition 2 acknowledged 18/18 frames and repetition 3 acknowledged 22/22, both with zero
+  rejects. Both seals passed action alignment, final hold, clipping, privacy, and decodeability.
+  Their contact sheets were visually accepted without issues, judgments remained current, finals
+  were mode `0600`, full decodes passed, and independent SHA-256 values matched the runtime.
+- Next: Select a privacy-safe client-rendered SPA transition and complete its three repetitions
+  without changing the candidate bundle.
+- Blocker or risk: The ledger is 3/12 across one of four required workflow classes. The release
+  remains blocked by the other nine live runs and the CI, lifecycle, security, and integrity gates.
+
+## 2026-07-30 — SPA qualification found and fixed idle-page capture startup
+
+- Outcome: Preserved the three prior static-click runs as superseded evidence and reset the
+  current v1 acceptance ledger to `0/12` after a candidate-bundle change.
+- Evidence: A physical click on Vite changed `/guide/` to `/guide/philosophy`, updated the visible
+  heading to `Project Philosophy`, and preserved a JavaScript sentinel, qualifying it as a real
+  client-rendered SPA transition. The first counted attempt then failed closed because Chrome did
+  not emit an initial screencast frame on the idle page. A diagnostic external pointer move
+  produced the missing frame, isolating the defect to startup paint rather than the broker.
+- Fix and verification: Added a behavioral regression test and one capture-owned, buttonless
+  `mouseMoved` event immediately after screencast startup. The focused tests passed red-green,
+  `npm run check` passed 297 main tests plus 3 fixture tests, plugin validation passed, and Node
+  22.23.1 and 24.18.0 self-checks passed. The rebuilt 1,288,517-byte bundle SHA-256 is
+  `bd1bb578327e39359781fec4aed674651783815d724cf2fd974248bec7ff3395`.
+  A fresh actual Codex Desktop Browser proof on the idle Vite page became observation-ready with
+  no external workaround and stopped at `1/1/1` received/accepted/acknowledged frames with zero
+  rejections.
+- Next: Repeat all three static-click runs and complete three Vite SPA-transition runs against
+  the rebuilt exact bundle before moving to animated-scroll and responsive-output workflows.
+- Blocker or risk: The new exact-bundle ledger is `0/12`; CI, isolated lifecycle, security,
+  privacy, and release-archive integrity gates remain open.
+
+## 2026-07-30 — rebuilt static-click repetition 1 passed
+
+- Outcome: Completed the first counted run against rebuilt candidate bundle
+  `bd1bb578327e39359781fec4aed674651783815d724cf2fd974248bec7ff3395`; the strict partial
+  ledger is now `1/12`.
+- Verified: Actual Codex Desktop Browser navigated the public Recordly contact page to the
+  homepage and visibly showed `Make beautiful screen recordings`. Capture reported `18/18/18`
+  received, accepted, and acknowledged frames with zero rejects. The seal was approved after a
+  compliant final hold. The decoded 1920x1080 contact sheet showed the starting contact page,
+  completed homepage, and held final state without visible defects.
+- Delivery evidence: Preview judgment was current and accepted with no issues. The mode-`0600`
+  final fully decoded at 1920x1080, 30 fps, H.264 yuv420p limited range, and independently matched
+  runtime SHA-256
+  `2c90e27dc736e994304e5975080ed5a6dd69b25a612fb8496e96a25cf12b0134`.
+- Non-counting attempt: An immediately preceding capture sealed as blocked because stop occurred
+  at a 0 ms final hold against the 300 ms minimum. It is intentionally absent from the ledger.
+- Next: Run static-click repetitions 2 and 3, then the three Vite SPA-transition repetitions.
+- Blocker or risk: The exact-bundle ledger is `1/12`; the remaining live, CI, lifecycle,
+  security, privacy, and archive-integrity gates still block release.

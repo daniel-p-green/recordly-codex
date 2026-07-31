@@ -8,7 +8,7 @@ import {
 } from "../../scripts/assert-release-version.mjs";
 
 describe("release tag version contract", () => {
-  it("pins the canonical v0.5.0 release metadata", () => {
+  it("keeps the unreleased v1.0.0 candidate metadata aligned", () => {
     const pkg = JSON.parse(readFileSync("package.json", "utf8")) as { version?: unknown };
     const lock = JSON.parse(readFileSync("package-lock.json", "utf8")) as {
       version?: unknown;
@@ -18,10 +18,10 @@ describe("release tag version contract", () => {
       version?: unknown;
     };
 
-    expect(pkg.version).toBe("0.5.0");
-    expect(lock.version).toBe("0.5.0");
-    expect(lock.packages?.[""]?.version).toBe("0.5.0");
-    expect(plugin.version).toBe("0.5.0");
+    expect(pkg.version).toBe("1.0.0");
+    expect(lock.version).toBe("1.0.0");
+    expect(lock.packages?.[""]?.version).toBe("1.0.0");
+    expect(plugin.version).toBe("1.0.0");
   });
 
   it("accepts only an exact v-prefixed package SemVer", () => {

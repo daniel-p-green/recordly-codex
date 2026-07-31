@@ -39,6 +39,7 @@ import {
   type SessionInspection,
   SessionStore,
 } from "../src/session/index.js";
+import { RecordingDiagnosticError } from "./diagnostics.js";
 import { RecordingServiceUnavailableError } from "./handlers.js";
 import { inspectPrivatePreview } from "./preview-inspection.js";
 import { loadProjectAssetRegistry, registerProjectAudioAsset } from "./project-asset-registry.js";
@@ -73,7 +74,6 @@ import {
 } from "./session-store-project-ops.js";
 
 import type {
-  CaptureBudget,
   CaptureStatus,
   RecordingMcpService,
   RecordingSessionView,
@@ -723,20 +723,30 @@ export function createSessionStoreService(
             current.project.revision,
           );
           if (current.project.schemaVersion === 2 || recorded !== undefined) {
-            await judgmentStore.assertAccepted({
-              projectId: current.project.projectId,
-              revision: current.project.revision,
-              ...previewJudgmentDigests(current.project),
-              previewArtifactSha256: await previewArtifactDigest(artifactRoot, current.project),
-            });
+            try {
+              await judgmentStore.assertAccepted({
+                projectId: current.project.projectId,
+                revision: current.project.revision,
+                ...previewJudgmentDigests(current.project),
+                previewArtifactSha256: await previewArtifactDigest(artifactRoot, current.project),
+              });
+            } catch (caught) {
+              if (caught instanceof RecordingDiagnosticError) throw caught;
+              throw new RecordingDiagnosticError("operation_failed", "stale_preview_judgment");
+            }
           }
         }
         const extension = current.project.output.format;
         const artifact = `projects/renders/${projectId}-r${revision}-${kind}.${extension}`;
-        const publication = await createRenderPublication({
-          artifactRoot,
-          fileName: `${projectId}-r${revision}-${kind}.${extension}`,
-        });
+        let publication: Awaited<ReturnType<typeof createRenderPublication>>;
+        try {
+          publication = await createRenderPublication({
+            artifactRoot,
+            fileName: `${projectId}-r${revision}-${kind}.${extension}`,
+          });
+        } catch {
+          throw new RecordingDiagnosticError("operation_failed", "final_publication_failed");
+        }
         try {
           const sourceInputs = await Promise.all(
             current.project.captureSources.map((source) =>
@@ -786,12 +796,19 @@ export function createSessionStoreService(
                 ? { status: "ready", revision: current.project.revision }
                 : { status: "rendered", revision: current.project.revision },
           });
-          const stored = await publishThenCompareAndSwap(publication, () =>
-            store.replace(updated, {
-              expectedRevision: current.project.revision,
-              expectedSha256: current.sha256,
-            }),
-          );
+          let stored: Awaited<ReturnType<typeof store.replace>>;
+          try {
+            stored = await publishThenCompareAndSwap(publication, () =>
+              store.replace(updated, {
+                expectedRevision: current.project.revision,
+                expectedSha256: current.sha256,
+              }),
+            );
+          } catch (caught) {
+            if (caught instanceof RecordingDiagnosticError) throw caught;
+            if (caught instanceof RecordingServiceUnavailableError) throw caught;
+            throw new RecordingDiagnosticError("operation_failed", "final_publication_failed");
+          }
           return {
             ...projectView(stored.project, stored.sha256),
             render: {

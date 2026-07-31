@@ -164,6 +164,7 @@ export function browserStartHelper(input: BrowserHelperInput): string {
     "    await session.send('Page.enable');",
     "    await session.send('Runtime.enable');",
     "    await session.send('Page.startScreencast', { format: 'jpeg', quality: 90, maxWidth: 1440, maxHeight: 900 });",
+    "    await session.send('Input.dispatchMouseEvent', { type: 'mouseMoved', x: 0, y: 0, button: 'none', buttons: 0 });",
     "    await Promise.race([initialObservedReady, page.waitForTimeout(10000).then(() => { throw new Error('recordly observed-event readiness timed out'); })]);",
     "  } catch (error) {",
     "    state.active = false;",

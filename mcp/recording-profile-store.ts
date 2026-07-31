@@ -10,7 +10,7 @@ import {
   unlink,
   writeFile,
 } from "node:fs/promises";
-import { isAbsolute, join, relative, resolve } from "node:path";
+import { isAbsolute, join, resolve } from "node:path";
 import { canonicalJson } from "../src/manifest/index.js";
 import {
   type RecordingProfileReference,
@@ -234,7 +234,9 @@ export class RecordingProfileStore {
   private envelope(value: unknown): Envelope {
     const record = object(value);
     exact(record, ["schemaVersion", "ownerToken", "profile"]);
-    if (field(record, "schemaVersion") !== 1 || typeof field(record, "ownerToken") !== "string")
+    if (field(record, "schemaVersion") !== 1)
+      throw new RangeError("persisted profile envelope version is unsupported");
+    if (typeof field(record, "ownerToken") !== "string")
       throw new RangeError("persisted profile envelope is invalid");
     const profile = this.ownerLocal(field(record, "profile"));
     return { schemaVersion: 1, ownerToken: field(record, "ownerToken") as string, profile };

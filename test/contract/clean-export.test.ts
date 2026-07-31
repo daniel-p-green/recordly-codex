@@ -1,4 +1,5 @@
 import { spawn } from "node:child_process";
+import { readFileSync } from "node:fs";
 import { chmod, copyFile, lstat, mkdir, mkdtemp, readdir, readFile, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { dirname, join, relative } from "node:path";
@@ -6,17 +7,9 @@ import { dirname, join, relative } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 
 const roots: string[] = [];
-const packageFiles = [
-  ".agents/plugins/marketplace.json",
-  ".codex-plugin/plugin.json",
-  ".mcp.json",
-  "LICENSE",
-  "THIRD_PARTY_NOTICES.md",
-  "browser/capture-runtime.js",
-  "plugin-runtime/recordly-codex-mcp.mjs",
-  "skills/recordly-codex/SKILL.md",
-  "skills/recordly-codex/agents/openai.yaml",
-] as const;
+const packageFiles = JSON.parse(
+  readFileSync(new URL("../../scripts/release-package-files.json", import.meta.url), "utf8"),
+) as string[];
 
 type JsonRpcResponse = {
   id?: number;
@@ -164,7 +157,7 @@ describe("clean marketplace export", () => {
         clientInfo: { name: "clean-export-test", version: "0.1.0" },
       });
       expect(initialized.result).toMatchObject({
-        serverInfo: { name: "recordly-codex-mcp-server", version: "0.5.0" },
+        serverInfo: { name: "recordly-codex-mcp-server", version: "1.0.0" },
       });
       transport.notify("notifications/initialized", {});
       const listed = await transport.call(2, "tools/list", {});

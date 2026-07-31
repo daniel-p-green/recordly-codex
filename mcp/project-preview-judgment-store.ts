@@ -2,7 +2,7 @@
 
 import { randomUUID } from "node:crypto";
 import { chmod, link, lstat, mkdir, readFile, realpath, unlink, writeFile } from "node:fs/promises";
-import { isAbsolute, join, relative, resolve } from "node:path";
+import { isAbsolute, join, resolve } from "node:path";
 import { canonicalJson } from "../src/manifest/index.js";
 import { type PreviewJudgment, validatePreviewJudgment } from "../src/project/preview-judgment.js";
 import { isContainedPath } from "../src/safe/path.js";
@@ -135,11 +135,15 @@ export class PreviewJudgmentStore {
       Object.getOwnPropertyNames(record).length !== 3 ||
       !Object.hasOwn(record, "schemaVersion") ||
       !Object.hasOwn(record, "ownerToken") ||
-      !Object.hasOwn(record, "judgment") ||
-      record["schemaVersion"] !== 1 ||
-      typeof record["ownerToken"] !== "string"
+      !Object.hasOwn(record, "judgment")
     ) {
       throw new RangeError("persisted preview judgment has an invalid shape");
+    }
+    if (record["schemaVersion"] !== 1) {
+      throw new RangeError("persisted preview judgment envelope version is unsupported");
+    }
+    if (typeof record["ownerToken"] !== "string") {
+      throw new RangeError("persisted preview judgment owner is invalid");
     }
     return {
       schemaVersion: 1,

@@ -1,0 +1,14 @@
+[
+  ".agents/plugins/marketplace.json",
+  ".codex-plugin/plugin.json",
+  ".mcp.json",
+  "LICENSE",
+  "THIRD_PARTY_NOTICES.md",
+  "browser/capture-runtime.js",
+  "contracts/host-support-v1-candidate.json",
+  "contracts/runtime-integrity-v1-candidate.json",
+  "plugin-runtime/recordly-codex-mcp.mjs",
+  "scripts/self-check.mjs",
+  "skills/recordly-codex/SKILL.md",
+  "skills/recordly-codex/agents/openai.yaml"
+]
