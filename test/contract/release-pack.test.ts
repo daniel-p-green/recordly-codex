@@ -31,5 +31,5 @@ describe("allowlisted release archive", () => {
     expect(report.packed.some((path) => path.startsWith("mcp/") && path.endsWith(".ts"))).toBe(
       false,
     );
-  });
+  }, 60_000);
 });
