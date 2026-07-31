@@ -458,7 +458,7 @@ describe("sealed session renderer", () => {
       clipping: {
         status: "pass",
         borderPx: 12,
-        expectedContentRect: { x: 90, y: 51, width: 1740, height: 978 },
+        expectedContentRect: { x: 90, y: 50, width: 1740, height: 978 },
         thresholds: {
           maxEdgeColorDelta: 0.18,
           maxCompositionColorDelta: 0.08,

@@ -1,0 +1,168 @@
+{
+  "schemaVersion": 1,
+  "candidateVersion": "1.0.0",
+  "protocolVersion": "2025-03-26",
+  "toolCount": 20,
+  "tools": [
+    {
+      "name": "apply_accepted_recording_project_editorial",
+      "title": "Apply accepted editorial zooms",
+      "readOnly": false,
+      "destructive": false,
+      "inputSchemaSha256": "cbf715027564a55cdde0f17a3179d2b964a3de8e26aca4282a48f77d248fb6b0",
+      "outputSchemaSha256": "a0bd6a4986874c62fa1cbd2be3099a05bad1424b9d4da53fbbd77ed28290b0f7"
+    },
+    {
+      "name": "apply_recording_profile",
+      "title": "Apply recording profile",
+      "readOnly": false,
+      "destructive": false,
+      "inputSchemaSha256": "f2f457e1449c19a42c44d572c14d352e09c71474eef4cddd05ec120bc8f251e1",
+      "outputSchemaSha256": "a0bd6a4986874c62fa1cbd2be3099a05bad1424b9d4da53fbbd77ed28290b0f7"
+    },
+    {
+      "name": "create_recording_profile",
+      "title": "Create recording profile",
+      "readOnly": false,
+      "destructive": false,
+      "inputSchemaSha256": "a745d2df2db93ef5b47b16e8a0b7050d4a551d409c870191ccac143a02e7a68e",
+      "outputSchemaSha256": "a0bd6a4986874c62fa1cbd2be3099a05bad1424b9d4da53fbbd77ed28290b0f7"
+    },
+    {
+      "name": "create_recording_project",
+      "title": "Create editable recording project",
+      "readOnly": false,
+      "destructive": false,
+      "inputSchemaSha256": "dda05b3cd9c396a35a4caf7b62834335280d09db2f17ff18b75a578425fae9ea",
+      "outputSchemaSha256": "a0bd6a4986874c62fa1cbd2be3099a05bad1424b9d4da53fbbd77ed28290b0f7"
+    },
+    {
+      "name": "create_recording_session",
+      "title": "Create recording session",
+      "readOnly": false,
+      "destructive": false,
+      "inputSchemaSha256": "681bda183ca4e9e54f4da22b0b5d5f2a69f170962093464ffce761fa873a13b8",
+      "outputSchemaSha256": "a0bd6a4986874c62fa1cbd2be3099a05bad1424b9d4da53fbbd77ed28290b0f7"
+    },
+    {
+      "name": "discard_recording_session",
+      "title": "Discard recording session",
+      "readOnly": false,
+      "destructive": true,
+      "inputSchemaSha256": "bac1273a1a7077c354e0301237b113f48e9b11ce47dd7f588355e110dd869b11",
+      "outputSchemaSha256": "a0bd6a4986874c62fa1cbd2be3099a05bad1424b9d4da53fbbd77ed28290b0f7"
+    },
+    {
+      "name": "get_recording_profile",
+      "title": "Get recording profile",
+      "readOnly": true,
+      "destructive": false,
+      "inputSchemaSha256": "4de19af589368821c1b35a190c5a2965e6aa25f0f711d66b0d01cc1d7c6e7e67",
+      "outputSchemaSha256": "a0bd6a4986874c62fa1cbd2be3099a05bad1424b9d4da53fbbd77ed28290b0f7"
+    },
+    {
+      "name": "import_recording_project_media",
+      "title": "Import private project media",
+      "readOnly": false,
+      "destructive": false,
+      "inputSchemaSha256": "5fea40efbf6797051eb44184230aa3d586fae1e05c169494150896fce811cd2c",
+      "outputSchemaSha256": "a0bd6a4986874c62fa1cbd2be3099a05bad1424b9d4da53fbbd77ed28290b0f7"
+    },
+    {
+      "name": "inspect_recording_project",
+      "title": "Inspect editable recording project",
+      "readOnly": true,
+      "destructive": false,
+      "inputSchemaSha256": "990f98ebe9d623fc5453cb1e4b9cb74b0cbdc43c505a9cac7fe7edd046636a26",
+      "outputSchemaSha256": "a0bd6a4986874c62fa1cbd2be3099a05bad1424b9d4da53fbbd77ed28290b0f7"
+    },
+    {
+      "name": "inspect_recording_project_preview",
+      "title": "Inspect rendered project preview",
+      "readOnly": true,
+      "destructive": false,
+      "inputSchemaSha256": "d933e0fe6dc4890396b14605076d9a95bfd15bf417e5f6eaf732c19ab6b6da54",
+      "outputSchemaSha256": "a0bd6a4986874c62fa1cbd2be3099a05bad1424b9d4da53fbbd77ed28290b0f7"
+    },
+    {
+      "name": "inspect_recording_session",
+      "title": "Inspect recording session",
+      "readOnly": true,
+      "destructive": false,
+      "inputSchemaSha256": "0b4297d7467a0874f2990b29e8f7f6d949915c3db1e1f7ad587fa30f96b5f1cb",
+      "outputSchemaSha256": "a0bd6a4986874c62fa1cbd2be3099a05bad1424b9d4da53fbbd77ed28290b0f7"
+    },
+    {
+      "name": "judge_recording_project_preview",
+      "title": "Judge recording project preview",
+      "readOnly": false,
+      "destructive": false,
+      "inputSchemaSha256": "937cd48457835418d1b4129e02ca71888d35ca687ab484c6ef7e042e5b1104e5",
+      "outputSchemaSha256": "a0bd6a4986874c62fa1cbd2be3099a05bad1424b9d4da53fbbd77ed28290b0f7"
+    },
+    {
+      "name": "list_recording_profiles",
+      "title": "List recording profiles",
+      "readOnly": true,
+      "destructive": false,
+      "inputSchemaSha256": "f973399805c1c233633f5196cf8e2ad40ee100b94996d711dcd030813b671bc5",
+      "outputSchemaSha256": "a0bd6a4986874c62fa1cbd2be3099a05bad1424b9d4da53fbbd77ed28290b0f7"
+    },
+    {
+      "name": "propose_recording_project_editorial",
+      "title": "Propose evidence-backed editorial zooms",
+      "readOnly": true,
+      "destructive": false,
+      "inputSchemaSha256": "456a2baad307dbf4d9b4e4533ee53294c8c92b1352d34c556262a91e005a6b34",
+      "outputSchemaSha256": "a0bd6a4986874c62fa1cbd2be3099a05bad1424b9d4da53fbbd77ed28290b0f7"
+    },
+    {
+      "name": "record_browser_event",
+      "title": "Record browser event",
+      "readOnly": false,
+      "destructive": false,
+      "inputSchemaSha256": "0e1a3acba145c4bb76e8fd3c0e3ecb6a1af1f8ebce9f80875a2cc13d0f6adac2",
+      "outputSchemaSha256": "a0bd6a4986874c62fa1cbd2be3099a05bad1424b9d4da53fbbd77ed28290b0f7"
+    },
+    {
+      "name": "render_recording_project_final",
+      "title": "Render recording project final",
+      "readOnly": false,
+      "destructive": false,
+      "inputSchemaSha256": "d933e0fe6dc4890396b14605076d9a95bfd15bf417e5f6eaf732c19ab6b6da54",
+      "outputSchemaSha256": "a0bd6a4986874c62fa1cbd2be3099a05bad1424b9d4da53fbbd77ed28290b0f7"
+    },
+    {
+      "name": "render_recording_project_preview",
+      "title": "Render recording project preview",
+      "readOnly": false,
+      "destructive": false,
+      "inputSchemaSha256": "d933e0fe6dc4890396b14605076d9a95bfd15bf417e5f6eaf732c19ab6b6da54",
+      "outputSchemaSha256": "a0bd6a4986874c62fa1cbd2be3099a05bad1424b9d4da53fbbd77ed28290b0f7"
+    },
+    {
+      "name": "revise_recording_project",
+      "title": "Revise editable recording project",
+      "readOnly": false,
+      "destructive": false,
+      "inputSchemaSha256": "2e6d07b90bec9c6afd6f5dc69ce817f3cc239c55d545f315346b9d363a14bdf5",
+      "outputSchemaSha256": "a0bd6a4986874c62fa1cbd2be3099a05bad1424b9d4da53fbbd77ed28290b0f7"
+    },
+    {
+      "name": "seal_recording_capture",
+      "title": "Seal recording capture",
+      "readOnly": false,
+      "destructive": false,
+      "inputSchemaSha256": "0b4297d7467a0874f2990b29e8f7f6d949915c3db1e1f7ad587fa30f96b5f1cb",
+      "outputSchemaSha256": "a0bd6a4986874c62fa1cbd2be3099a05bad1424b9d4da53fbbd77ed28290b0f7"
+    },
+    {
+      "name": "update_recording_profile",
+      "title": "Update recording profile",
+      "readOnly": false,
+      "destructive": false,
+      "inputSchemaSha256": "8ebbde415c3d79779dc48617e59eb21d5c5ef2687eb9e663469470ca2f39e8fa",
+      "outputSchemaSha256": "a0bd6a4986874c62fa1cbd2be3099a05bad1424b9d4da53fbbd77ed28290b0f7"
+    }
+  ]
+}

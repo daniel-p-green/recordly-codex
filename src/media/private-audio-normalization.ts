@@ -2,7 +2,7 @@ import { execFile } from "node:child_process";
 import { createHash, randomUUID } from "node:crypto";
 import { constants } from "node:fs";
 import { link, lstat, open, realpath, unlink } from "node:fs/promises";
-import { isAbsolute, relative, resolve } from "node:path";
+import { isAbsolute, resolve } from "node:path";
 import { resolveMediaExecutable } from "../encoder/ffmpeg.js";
 import { isContainedPath } from "../safe/path.js";
 import type { ImportedMedia } from "./private-media-library.js";

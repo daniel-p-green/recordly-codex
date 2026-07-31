@@ -43,6 +43,9 @@ jobs:
       - name: Verify release tag matches package version
         run: node scripts/assert-release-version.mjs
 
+      - name: Run release self-check
+        run: npm run self-check
+
       - name: Validate the release candidate
         run: >-
           bash scripts/ci/run-quality.sh &&

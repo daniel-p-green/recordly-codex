@@ -1,4 +1,4 @@
-import { chmod, mkdtemp, rm, symlink } from "node:fs/promises";
+import { chmod, mkdtemp, readFile, rm, symlink, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
@@ -78,6 +78,20 @@ describe("owner-local recording profile storage", () => {
     await rm(join(root, "profiles"), { recursive: true });
     await symlink(outside, join(root, "profiles"));
     await expect(store.list()).rejects.toThrow(/private|symbolic|escape/i);
+  });
+
+  it("fails closed with an explicit diagnostic for unsupported envelope versions", async () => {
+    const root = await mkdtemp(join(tmpdir(), "recordly-profiles-"));
+    roots.push(root);
+    const store = new RecordingProfileStore(root, "owner-1");
+    await store.create(profile());
+    const path = join(root, "profiles", "team-demo.json");
+    const persisted = JSON.parse(await readFile(path, "utf8")) as Record<string, unknown>;
+    await writeFile(path, `${JSON.stringify({ ...persisted, schemaVersion: 2 })}\n`, {
+      mode: 0o600,
+    });
+
+    await expect(store.load("team-demo")).rejects.toThrow(/version.*unsupported/i);
   });
 
   it("enforces the owner-local profile limit", async () => {

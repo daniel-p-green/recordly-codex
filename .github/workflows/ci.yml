@@ -46,6 +46,9 @@ jobs:
       - name: Install exact dependencies
         run: npm ci
 
+      - name: Run release self-check
+        run: npm run self-check
+
       - name: Run quality and coverage gate
         run: bash scripts/ci/run-quality.sh
 
@@ -88,6 +91,9 @@ jobs:
 
       - name: Install exact dependencies
         run: npm ci
+
+      - name: Run release self-check
+        run: npm run self-check
 
       - name: Validate plugin package
         run: bash scripts/ci/run-plugin-validation.sh

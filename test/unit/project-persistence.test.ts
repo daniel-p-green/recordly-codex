@@ -194,4 +194,18 @@ describe("recording project persistence", () => {
       new RecordingProjectStore(root, "owner-2").load("workflow-project"),
     ).rejects.toThrow(/owned/i);
   });
+
+  it("fails closed with an explicit diagnostic for unsupported envelope versions", async () => {
+    const root = await mkdtemp(join(tmpdir(), "recordly-project-store-"));
+    roots.push(root);
+    const store = new RecordingProjectStore(root, "owner-1");
+    await store.create(project);
+    const path = join(root, "projects", "workflow-project.json");
+    const persisted = JSON.parse(await readFile(path, "utf8")) as Record<string, unknown>;
+    await writeFile(path, `${JSON.stringify({ ...persisted, schemaVersion: 2 })}\n`, {
+      mode: 0o600,
+    });
+
+    await expect(store.load("workflow-project")).rejects.toThrow(/version.*unsupported/i);
+  });
 });

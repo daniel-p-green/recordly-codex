@@ -4,9 +4,10 @@ import { lstat, readFile, rename, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { validateRecordingRequest } from "../src/contracts/index.js";
 import type { SessionInspection } from "../src/session/index.js";
-import { browserStartHelper, browserStopHelper } from "./browser-helper.js";
+import { iabBrowserStartHelper, iabBrowserStopHelper } from "./browser-iab-helper.js";
 import {
   type CaptureBroker,
+  type CaptureBrokerFailureReason,
   createCaptureBroker,
   DEFAULT_CAPTURE_BUDGET,
 } from "./capture-broker.js";
@@ -14,6 +15,22 @@ import { RecordingServiceUnavailableError } from "./handlers.js";
 import type { CaptureBudget, CaptureStatus } from "./types.js";
 
 const FILE_MODE = 0o600;
+const BROKER_FAILURE_REASONS = new Set<string>([
+  "backpressure",
+  "broker_interrupted",
+  "budget_exceeded",
+  "browser_start_failed",
+  "durable_write_failed",
+  "incomplete_capture",
+  "invalid_broker_clock",
+  "malformed_frame",
+  "malformed_observed_event",
+  "observed_event_before_baseline",
+  "observed_event_delivery_failed",
+  "observed_event_flood",
+  "observed_event_persist_failed",
+  "observer_challenge_cap",
+]);
 
 export type BrokerState = {
   schemaVersion: 1;
@@ -23,7 +40,7 @@ export type BrokerState = {
   budget: CaptureBudget;
   acceptedFrames: number;
   acceptedBytes: number;
-  reason?: "budget_exceeded";
+  reason?: CaptureBrokerFailureReason;
 };
 
 export const activeCaptureBrokers = new Map<string, CaptureBroker>();
@@ -113,7 +130,7 @@ export async function readBrokerState(
       (acceptedFrames as number) < 0 ||
       !Number.isSafeInteger(acceptedBytes) ||
       (acceptedBytes as number) < 0 ||
-      (legacy["reason"] !== undefined && legacy["reason"] !== "budget_exceeded")
+      (legacy["reason"] !== undefined && !BROKER_FAILURE_REASONS.has(String(legacy["reason"])))
     ) {
       throw new RecordingServiceUnavailableError();
     }
@@ -125,7 +142,9 @@ export async function readBrokerState(
       budget,
       acceptedFrames: acceptedFrames as number,
       acceptedBytes: acceptedBytes as number,
-      ...(legacy["reason"] === undefined ? {} : { reason: "budget_exceeded" }),
+      ...(legacy["reason"] === undefined
+        ? {}
+        : { reason: legacy["reason"] as CaptureBrokerFailureReason }),
     };
   } catch (error) {
     if (isNotFound(error)) return undefined;
@@ -185,10 +204,11 @@ export async function startBroker(
     const helperInput = {
       sessionId: inspection.sessionId,
       endpoint: broker.endpoint,
+      mailboxRoot: broker.mailboxRoot,
       origin: state.origin,
     };
-    await writeBrowserHelper(inspection.paths.startWrapper, browserStartHelper(helperInput));
-    await writeBrowserHelper(inspection.paths.stopWrapper, browserStopHelper(helperInput));
+    await writeBrowserHelper(inspection.paths.startWrapper, iabBrowserStartHelper(helperInput));
+    await writeBrowserHelper(inspection.paths.stopWrapper, iabBrowserStopHelper(helperInput));
     activeCaptureBrokers.set(captureBrokerKey(artifactRoot, inspection.sessionId), broker);
   } catch (error) {
     await broker.close().catch(() => undefined);

@@ -6,7 +6,9 @@ export default defineConfig({
     coverage: {
       provider: "v8",
       reporter: ["text", "json-summary", "html"],
-      exclude: ["src/index.ts"],
+      // The self-check is exercised as a real subprocess by its behavioral tests; V8 cannot
+      // attribute that child-process execution back to the parent coverage session.
+      exclude: ["src/index.ts", "scripts/self-check.mjs"],
       thresholds: {
         lines: 80,
         branches: 80,

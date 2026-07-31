@@ -1,4 +1,4 @@
-import { lstat, mkdtemp, readFile, rm } from "node:fs/promises";
+import { lstat, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
@@ -63,6 +63,20 @@ describe("preview judgment persistence", () => {
     } else {
       await expect(first.assertAccepted({ ...base })).rejects.toThrow(/accepted/i);
     }
+  });
+
+  it("fails closed with an explicit diagnostic for unsupported envelope versions", async () => {
+    const root = await mkdtemp(join(tmpdir(), "recordly-judgments-"));
+    roots.push(root);
+    const store = new PreviewJudgmentStore(root, "owner-1");
+    await store.create({ ...base, verdict: "accept", issues: [] });
+    const path = join(root, "projects", "judgments", "project-1-r0.json");
+    const persisted = JSON.parse(await readFile(path, "utf8")) as Record<string, unknown>;
+    await writeFile(path, `${JSON.stringify({ ...persisted, schemaVersion: 2 })}\n`, {
+      mode: 0o600,
+    });
+
+    await expect(store.load("project-1", 0)).rejects.toThrow(/version.*unsupported/i);
   });
 });
 

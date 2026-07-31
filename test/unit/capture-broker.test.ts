@@ -1,3 +1,4 @@
+import { randomUUID } from "node:crypto";
 import { lstat, mkdtemp, readFile, rm, symlink, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -19,6 +20,9 @@ async function broker(
     maxCaptureSeconds?: number;
     maxAcceptedFrames?: number;
     maxAcceptedBytes?: number;
+    queueCapacity?: number;
+    beforeFramePersist?: () => Promise<void>;
+    onFrameAdmit?: (pendingWrites: number) => void;
   } = {},
 ) {
   const root = await mkdtemp(join(tmpdir(), "recordly-codex-broker-"));
@@ -36,6 +40,11 @@ async function broker(
       ? {}
       : { maxAcceptedFrames: input.maxAcceptedFrames }),
     ...(input.maxAcceptedBytes === undefined ? {} : { maxAcceptedBytes: input.maxAcceptedBytes }),
+    ...(input.queueCapacity === undefined ? {} : { queueCapacity: input.queueCapacity }),
+    ...(input.beforeFramePersist === undefined
+      ? {}
+      : { beforeFramePersist: input.beforeFramePersist }),
+    ...(input.onFrameAdmit === undefined ? {} : { onFrameAdmit: input.onFrameAdmit }),
     onPhase: async (phase) => {
       phases.push(phase);
     },
@@ -67,6 +76,61 @@ function framePayload(sessionId: number) {
 }
 
 describe("loopback capture broker", () => {
+  it("accepts the same capture protocol through a private filesystem mailbox", async () => {
+    const { instance } = await broker();
+    const mailboxPost = async (path: string, data: unknown, token?: string) => {
+      const id = randomUUID();
+      const requestPath = join(instance.mailboxRoot, `request-${id}.json`);
+      await writeFile(
+        requestPath,
+        JSON.stringify({
+          schemaVersion: 1,
+          id,
+          path,
+          ...(token === undefined ? {} : { token }),
+          data,
+        }),
+        { mode: 0o600, flag: "wx" },
+      );
+      const responsePath = join(instance.mailboxRoot, `response-${id}.json`);
+      for (let attempt = 0; attempt < 2_000; attempt += 1) {
+        try {
+          return JSON.parse(await readFile(responsePath, "utf8")) as {
+            status: number;
+            body: Record<string, unknown>;
+          };
+        } catch (error) {
+          if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
+          await new Promise((resolve) => setTimeout(resolve, 5));
+        }
+      }
+      throw new Error("mailbox response timed out");
+    };
+
+    const claim = await mailboxPost("/claim", identity);
+    expect(claim.status).toBe(200);
+    // biome-ignore lint/complexity/useLiteralKeys: the mailbox response is an untrusted dictionary.
+    const token = claim.body["token"];
+    expect(token).toMatch(/^[0-9a-f]{64}$/u);
+    expect((await mailboxPost("/frame", framePayload(1), token as string)).status).toBe(200);
+    const stopped = await mailboxPost(
+      "/stop",
+      {
+        ...identity,
+        receivedFrames: 1,
+        acceptedFrames: 1,
+        ackedFrames: 1,
+        rejectedFrames: 0,
+        degradationRequested: false,
+      },
+      token as string,
+    );
+    expect(stopped).toMatchObject({ status: 200, body: { ok: true, status: "stopped" } });
+    const mailboxRoot = instance.mailboxRoot;
+    await instance.close();
+    await expect(lstat(mailboxRoot)).rejects.toMatchObject({ code: "ENOENT" });
+  });
+
   it("issues bounded fresh observer challenges only after a durable baseline without persisting markers", async () => {
     const { root, phases, instance, post } = await broker();
     const logs = (["debug", "info", "log", "warn", "error"] as const).map((method) =>
@@ -790,6 +854,102 @@ describe("loopback capture broker", () => {
       });
     } finally {
       await instance.close();
+    }
+  });
+
+  it("fails closed with backpressure when the durable-write queue is saturated", async () => {
+    let releasePersist!: () => void;
+    const gate = new Promise<void>((resolve) => {
+      releasePersist = resolve;
+    });
+    let peakPending = 0;
+    const { root, phases, instance, post } = await broker({
+      queueCapacity: 2,
+      beforeFramePersist: async () => {
+        await gate;
+      },
+      onFrameAdmit: (pendingWrites) => {
+        peakPending = Math.max(peakPending, pendingWrites);
+      },
+    });
+    try {
+      const token = (
+        (await post("/claim", identity).then((response) => response.json())) as {
+          token: string;
+        }
+      ).token;
+      const first = post("/frame", framePayload(1), token);
+      const second = post("/frame", framePayload(2), token);
+      for (let attempt = 0; attempt < 200 && peakPending < 2; attempt += 1) {
+        await new Promise((resolve) => setTimeout(resolve, 5));
+      }
+      expect(peakPending).toBe(2);
+      const rejected = await post("/frame", framePayload(3), token);
+      expect(rejected.status).toBe(429);
+      expect(phases.at(-1)).toBe("failed");
+      expect(JSON.parse(await readFile(join(root, "capture-summary.json"), "utf8"))).toMatchObject({
+        status: "failed",
+        reason: "backpressure",
+      });
+      expect(instance.status()).toMatchObject({
+        phase: "failed",
+        reason: "backpressure",
+      });
+      releasePersist();
+      // The first admitted write may still finish; later queued writes fail closed
+      // once backpressure has already marked the capture failed.
+      const firstStatus = (await first).status;
+      const secondStatus = (await second).status;
+      expect([firstStatus, secondStatus].sort()).toEqual([200, 500]);
+      expect(instance.status()).toMatchObject({
+        phase: "failed",
+        reason: "backpressure",
+        acceptedFrames: 1,
+      });
+      expect((await post("/frame", framePayload(4), token)).status).toBe(429);
+    } finally {
+      releasePersist();
+      await instance.close();
+    }
+  });
+
+  it("persists broker_interrupted when closed while a capture is claimed or running", async () => {
+    const claimed = await broker();
+    try {
+      await claimed.post("/claim", identity);
+      await claimed.instance.close();
+      expect(
+        JSON.parse(await readFile(join(claimed.root, "capture-summary.json"), "utf8")),
+      ).toMatchObject({
+        status: "failed",
+        reason: "broker_interrupted",
+      });
+      expect(claimed.instance.status()).toMatchObject({
+        phase: "failed",
+        reason: "broker_interrupted",
+      });
+    } finally {
+      await claimed.instance.close();
+    }
+
+    const running = await broker();
+    try {
+      const token = (
+        (await running.post("/claim", identity).then((response) => response.json())) as {
+          token: string;
+        }
+      ).token;
+      expect((await running.post("/frame", framePayload(1), token)).status).toBe(200);
+      await running.instance.close();
+      expect(
+        JSON.parse(await readFile(join(running.root, "capture-summary.json"), "utf8")),
+      ).toMatchObject({
+        status: "failed",
+        reason: "broker_interrupted",
+        acceptedFrames: 1,
+      });
+    } finally {
+      await running.instance.close();
     }
   });
 });

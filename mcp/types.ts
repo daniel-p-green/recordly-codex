@@ -4,6 +4,7 @@ import type {
   PreviewJudgmentIssue,
   PreviewJudgmentVerdict,
 } from "../src/project/preview-judgment.js";
+import type { CaptureBrokerFailureReason } from "./capture-broker.js";
 import type { PreviewInspection } from "./preview-inspection.js";
 
 export type RecordingSessionStatus = "open" | "sealed" | "discarded";
@@ -18,7 +19,7 @@ export type CaptureStatus = CaptureBudget & {
   phase: "ready" | "claimed" | "running" | "stopped" | "failed";
   acceptedFrames: number;
   acceptedBytes: number;
-  reason?: "budget_exceeded";
+  reason?: CaptureBrokerFailureReason;
 };
 
 /** Events Codex may describe. Capture evidence is generated locally, never supplied by the model. */

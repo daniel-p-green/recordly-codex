@@ -4,6 +4,8 @@ Recordly Codex is an Apache-2.0 Codex plugin and local TypeScript runtime for pr
 
 v0.5.0 has source, fixture, one authorized public-workflow, public-release, and clean-install proof. The live workflow remains bounded to the helper surface and one approved site.
 
+`main` is now the unreleased v1.0.0 candidate line. Install the verified v0.5.0 tag until v1.0.0 completes its acceptance, CI, security, lifecycle, and release-integrity gates.
+
 ## Supported workflow
 
 Use only Codex Desktop Browser with public or explicitly authorized, pre-authenticated sites. Create a session from an approved URL and objective, capture the visible result, seal a quality-approved capture, then create and render a versioned project.
@@ -46,6 +48,12 @@ The inspected square preview was 1080×1080 at 30 fps: 573 frames over 19.1 seco
 
 Generated one-session Browser helpers send CDP screencast frames to a loopback broker. The broker persists frame receipts and narrow, trusted action evidence on one monotonic clock. Planned events submitted through `record_browser_event` are context only; they cannot stand in for observed actions. Treat the returned helper contents as private: execute them only through the returned, matching one-session Codex Desktop Browser entrypoint. Do not paste, log, store, or share their contents.
 
+Codex Desktop Browser capture is a rehearsed one-shot operation: import both returned private
+entrypoints and start capture, perform the already-approved Browser actions, verify the visible
+result, and stop capture within one `node_repl` execution. The Browser capability is scoped to
+that active execution context, so yielding between start and stop invalidates the capture. A
+failed or interrupted attempt must be discarded rather than sealed.
+
 Sealing fails closed unless the capture and media gates pass, including durable frame timing, a trusted observed action, a decoded visible result, final hold, frozen-frame, clipping, privacy, and media checks. A sealed delivery contains a deterministic MP4, manifest, and quality report.
 
 ## Project, preview, and final
@@ -67,7 +75,7 @@ The normal flow is:
 
 MP4 and GIF output are supported. GIF has no audio. Built-in profiles cover 1920×1080 landscape, 1080×1080 square, and 1080×1920 vertical output with draft, standard, and high quality settings. The output-parity fixture suite renders preview and final in both MP4 and GIF at all three geometries and decodes declared checkpoints. That is fixture proof, not pixel identity with Recordly or proof of all real-world workflows.
 
-See [the capability matrix](docs/capability-matrix.md), [architecture](docs/architecture.md), [MCP protocol v0.5](docs/mcp-protocol-v0.5.md), and [output-parity contract](docs/output-parity-v1.md) for the exact boundaries.
+See [the capability matrix](docs/capability-matrix.md), [architecture](docs/architecture.md), [MCP protocol v0.5](docs/mcp-protocol-v0.5.md), [v1 MCP candidate](docs/mcp-protocol-v1-candidate.md), [v1 host support](docs/host-support-v1-candidate.md), [v1 persisted-state policy](docs/persisted-state-v1-candidate.md), [v1.0 goal and TODO](docs/v1-roadmap.md), [v1 acceptance evidence](docs/v1-acceptance-evidence.md), and [output-parity contract](docs/output-parity-v1.md) for the exact boundaries.
 
 ## Intentionally narrower than Recordly
 
@@ -82,4 +90,4 @@ npm run fixtures:output-parity:validate
 npm run check
 ```
 
-Requirements: Node.js, `ffmpeg`, and `ffprobe`. The local Chrome harness and fixture suite are test evidence, not a Codex Desktop Browser proof.
+Requirements: Node.js 22.17+ on major 22 or Node.js 24, plus matching FFmpeg and FFprobe versions from FFmpeg 6.1.1 through 8.x. Run `npm run self-check -- --json` before recording. The local Chrome harness and fixture suite are test evidence, not a Codex Desktop Browser proof.

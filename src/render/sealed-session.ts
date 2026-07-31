@@ -707,8 +707,10 @@ function expectedContentRect(
   const height = nearestEven(sourceHeight * scale);
   const outerWidth = width + BORDER_PX * 2;
   const outerHeight = height + BORDER_PX * 2;
-  const outerX = Math.floor((OUTPUT_WIDTH - outerWidth) / 2);
-  const outerY = Math.floor((OUTPUT_HEIGHT - outerHeight) / 2);
+  const centeredYuv420Offset = (available: number, content: number): number =>
+    Math.floor(Math.floor((available - content) / 2) / 2) * 2;
+  const outerX = centeredYuv420Offset(OUTPUT_WIDTH, outerWidth);
+  const outerY = centeredYuv420Offset(OUTPUT_HEIGHT, outerHeight);
   return {
     x: outerX + BORDER_PX,
     y: outerY + BORDER_PX,

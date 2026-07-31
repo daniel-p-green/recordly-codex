@@ -2,7 +2,7 @@
 
 import { randomUUID } from "node:crypto";
 import { chmod, link, lstat, mkdir, readFile, realpath, unlink, writeFile } from "node:fs/promises";
-import { isAbsolute, join, relative, resolve } from "node:path";
+import { isAbsolute, join, resolve } from "node:path";
 import { canonicalJson } from "../src/manifest/index.js";
 import type { InspectedVisualMedia } from "../src/media/private-visual-raster.js";
 import { isContainedPath } from "../src/safe/path.js";

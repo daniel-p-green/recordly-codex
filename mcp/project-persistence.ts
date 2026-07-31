@@ -12,7 +12,7 @@ import {
   unlink,
   writeFile,
 } from "node:fs/promises";
-import { isAbsolute, join, relative, resolve } from "node:path";
+import { isAbsolute, join, resolve } from "node:path";
 import { canonicalJson } from "../src/manifest/index.js";
 import { type RecordingProject, validateRecordingProject } from "../src/project/index.js";
 import { isContainedPath } from "../src/safe/path.js";
@@ -118,7 +118,10 @@ export class RecordingProjectStore {
     await this.assertPrivateRegularFile(path);
     const parsed = object(JSON.parse(await readFile(path, "utf8")) as unknown);
     exact(parsed, ["schemaVersion", "ownerToken", "projectSha256", "project"]);
-    if (parsed["schemaVersion"] !== 1 || parsed["ownerToken"] !== this.ownerToken) {
+    if (parsed["schemaVersion"] !== 1) {
+      throw new RangeError("persisted project envelope version is unsupported");
+    }
+    if (parsed["ownerToken"] !== this.ownerToken) {
       throw new RangeError("project is not owned by this artifact root");
     }
     if (typeof parsed["projectSha256"] !== "string" || !digest.test(parsed["projectSha256"])) {

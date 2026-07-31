@@ -472,7 +472,9 @@ describe("recordly Codex MCP handlers", () => {
 
       expect(inspected.requestId).toBe(created.requestId);
       expect(startHelper).toContain('const recordingOrigin = "https://demo.example";');
-      expect(startHelper).not.toContain("new URL");
+      expect(startHelper).toContain("export default async function startRecordlyIabCapture(tab)");
+      expect(startHelper).toContain('tab.capabilities.get("cdp")');
+      expect(startHelper).not.toContain("new URL(page.url())");
       expect(inspected.eventCount).toBe(2);
       expect((await lstat(artifactRoot)).mode & 0o777).toBe(0o700);
       expect((await lstat(join(artifactRoot, ".recordly-codex-owner-token"))).mode & 0o777).toBe(
@@ -681,9 +683,14 @@ describe("recordly Codex MCP handlers", () => {
       });
       expect(created.session.sessionId).toMatch(/^[A-Za-z0-9][A-Za-z0-9_-]*$/u);
       const startHelper = await readFile(created.session.browserStartHelperPath, "utf8");
-      expect(startHelper).toMatch(/^async \(page\) =>/u);
+      expect(startHelper).toContain("export default async function startRecordlyIabCapture(tab)");
+      expect(startHelper).toContain('tab.capabilities.get("cdp")');
       expect(startHelper).toContain("page.request.post");
-      expect(startHelper).not.toContain("import ");
+      expect(startHelper.match(/^import .*$/gmu)).toEqual([
+        'import { randomUUID } from "node:crypto";',
+        'import { lstat, readFile, rename, unlink, writeFile } from "node:fs/promises";',
+        'import { join } from "node:path";',
+      ]);
       expect(startHelper).not.toMatch(/[0-9a-f]{64}/u);
       expect(startHelper).not.toContain("receiptOffsetUs");
       expect(JSON.stringify(created.session)).not.toContain("capability");
@@ -777,7 +784,7 @@ describe("recordly Codex MCP handlers", () => {
         expect.objectContaining({
           id: 1,
           result: expect.objectContaining({
-            serverInfo: { name: "recordly-codex-mcp-server", version: "0.5.0" },
+            serverInfo: { name: "recordly-codex-mcp-server", version: "1.0.0" },
           }),
         }),
       ]),

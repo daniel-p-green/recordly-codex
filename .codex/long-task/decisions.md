@@ -90,3 +90,42 @@
 - Decision: Let Codex plan, inspect previews, record bounded structured judgments, and request limited revisions. Keep capture evidence, media normalization, composition, encoding, digest checks, and publication in versioned tested code.
 - Reason: This gives the agent useful editorial autonomy without making its prose or tool success the only record of what happened.
 - Consequence: Final publication requires the exact current accepted preview judgment and exhausted safety checks. Credentials, CAPTCHA, consent, payments, sensitive uploads, irreversible actions, and unsupported Browser capabilities still stop for direction.
+
+## D-013 — Count only exact v1 candidate runs and validate partial evidence early
+
+- Context: A full Browser-to-final rehearsal passed under supported Node 22 while metadata still reported 0.5.1, so the strict v1 ledger correctly rejected it as non-candidate evidence.
+- Decision: Align the unreleased candidate to 1.0.0 before counted runs. Keep final validation fixed at exactly 12 runs, and add a separate strict partial-ledger mode for early schema and privacy validation.
+- Alternatives considered: Relabel the 0.5.1 rehearsal as v1 evidence; postpone all ledger validation until run 12; weaken the final validator to accept incomplete evidence.
+- Reason: Candidate identity is part of the evidence chain, and early validation prevents malformed or privacy-unsafe entries from accumulating without redefining 12/12 completion.
+- Consequence: Rehearsals remain explicitly non-counting. Partial validation never represents final proof, and all 12 counted runs must share the exact bundle digest.
+
+## D-014 — Keep the audited candidate; do not release it yet
+
+- Context: Cursor left a broad uncommitted candidate touching Browser capture, persistence,
+  contracts, CI, documentation, and generated runtime output.
+- Decision: Keep the working-tree implementation because the full local suite, plugin contract,
+  coverage gate, supported-runtime self-checks, bundle-integrity check, and one complete real
+  Browser-to-final acceptance run pass. Treat it as an unreleased candidate, not a release.
+- Alternatives considered: Roll back the entire Cursor change set; release immediately because
+  local tests pass; keep only the version bump while discarding the Browser adapter.
+- Reason: A wholesale rollback would discard tested fail-closed behavior and the only working
+  actual Desktop Browser capture path. Local proof is strong enough to preserve the work but
+  incomplete against the explicit v1 release gates.
+- Consequence: No tag, push, marketplace update, or release is authorized until the roadmap's
+  remaining acceptance, lifecycle, CI, security, and archive-integrity gates close.
+
+## D-015 — Reset acceptance evidence after any candidate-bundle change
+
+- Context: Three static-click runs passed against one exact bundle, but qualifying the SPA class
+  exposed an idle-page startup defect that required rebuilding the candidate.
+- Decision: Preserve prior runs as superseded history, reset the release-gating ledger to zero,
+  and rerun every workflow class against the rebuilt exact bundle.
+- Alternatives considered: Count the prior runs across two bundle digests; omit the startup fix
+  and choose a page that paints continuously; weaken observed-event readiness.
+- Reason: The 12-run matrix is evidence for one releasable artifact. Mixing digests would not
+  prove the artifact being tagged, and selecting around a real compatibility defect would leave
+  supported static pages unreliable.
+- Consequence: Bundle SHA-256
+  `bd1bb578327e39359781fec4aed674651783815d724cf2fd974248bec7ff3395`
+  starts at `0/12`; all counted runs must use it unless another code change resets the ledger
+  again.

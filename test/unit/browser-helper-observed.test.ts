@@ -62,6 +62,105 @@ function findLastCallIndex(
 }
 
 describe("Browser observed-event helper", () => {
+  it("triggers one capture-owned initial paint so a static page can arm observation", async () => {
+    const input = {
+      sessionId: "session-static-paint-001",
+      endpoint: "http://127.0.0.1:43210",
+      origin: "https://vite.dev",
+      bindingName: "__recordly_observed_static_paint",
+    };
+    const calls: Array<{ method: string; params?: CdpParams }> = [];
+    const listeners = new Map<string, Set<(payload: Record<string, unknown>) => void>>();
+    let screencastStarted = false;
+    const session = {
+      on: (event: string, listener: (payload: Record<string, unknown>) => void) => {
+        const targets = listeners.get(event) ?? new Set();
+        targets.add(listener);
+        listeners.set(event, targets);
+      },
+      off: (event: string, listener: (payload: Record<string, unknown>) => void) => {
+        listeners.get(event)?.delete(listener);
+      },
+      emit: (event: string, payload: Record<string, unknown>) => {
+        for (const listener of listeners.get(event) ?? []) listener(payload);
+      },
+      send: async (method: string, params?: CdpParams) => {
+        calls.push({ method, ...(params === undefined ? {} : { params }) });
+        if (method === "Page.startScreencast") screencastStarted = true;
+        if (method === "Input.dispatchMouseEvent") {
+          if (!screencastStarted) throw new Error("paint trigger ran before screencast startup");
+          session.emit("Page.screencastFrame", {
+            data: Buffer.from("static-baseline").toString("base64"),
+            sessionId: 1,
+            metadata: { deviceWidth: 1440, deviceHeight: 900 },
+          });
+        }
+        if (method === "Page.getFrameTree") {
+          return {
+            frameTree: {
+              frame: {
+                id: "static-main-frame",
+                loaderId: "static-loader",
+                url: "https://vite.dev/guide/",
+                securityOrigin: "https://vite.dev",
+              },
+            },
+          };
+        }
+        if (method === "Page.createIsolatedWorld") return { executionContextId: 42 };
+        if (
+          method === "Runtime.evaluate" &&
+          typeof params?.expression === "string" &&
+          params.expression.includes("settleWheel")
+        ) {
+          session.emit("Runtime.consoleAPICalled", {
+            type: "debug",
+            args: [
+              { type: "string", value: MARKER_A },
+              {
+                type: "string",
+                value: JSON.stringify({ kind: "ready", nonce: NONCE_A }),
+              },
+            ],
+            executionContextId: 42,
+          });
+        }
+        return {};
+      },
+    };
+    const page = {
+      request: {
+        post: async (url: string) => {
+          const path = new URL(url).pathname;
+          const body =
+            path === "/claim"
+              ? { ok: true, token: "runtime-only-token" }
+              : path === "/observer-challenge"
+                ? { ok: true, marker: MARKER_A }
+                : path === "/stop"
+                  ? { ok: true, status: "stopped" }
+                  : { ok: true, accepted: true };
+          return { ok: () => true, json: async () => body };
+        },
+      },
+      url: () => "https://vite.dev/guide/",
+      waitForTimeout: () => new Promise<void>(() => undefined),
+      context: () => ({ newCDPSession: async () => session }),
+    };
+    const start = Function(`return (${browserStartHelper(input)})`)() as (
+      value: unknown,
+    ) => Promise<unknown>;
+    const stop = Function(`return (${browserStopHelper(input)})`)() as (
+      value: unknown,
+    ) => Promise<unknown>;
+
+    await expect(start(page)).resolves.toEqual({ status: "running", observedReady: true });
+    await expect(stop(page)).resolves.toEqual({ ok: true, status: "stopped" });
+    expect(
+      calls.filter((call) => call.method === "Input.dispatchMouseEvent").map((call) => call.params),
+    ).toEqual([{ type: "mouseMoved", x: 0, y: 0, button: "none", buttons: 0 }]);
+  });
+
   it("arms once per document identity and deduplicates active and pending loader events", async () => {
     const input = {
       sessionId: "session-arm-001",
@@ -1425,5 +1524,204 @@ describe("Browser observed-event helper", () => {
     await new Promise((resolveTick) => setImmediate(resolveTick));
     expect(requests.filter((request) => request.path === "/observed-event")).toHaveLength(2);
     expect(pageListeners.get("load")?.size ?? 0).toBe(0);
+  });
+
+  it("keeps SPA same-loader context and replaces context after same-origin redirects", async () => {
+    const input = {
+      sessionId: "session-redirect-spa-001",
+      endpoint: "http://127.0.0.1:43210",
+      origin: "https://recordly.dev",
+      bindingName: "__recordly_observed_redirect_spa",
+    };
+    const calls: Array<{ method: string; params?: CdpParams }> = [];
+    const requests: Array<{ path: string; data: Record<string, unknown> }> = [];
+    const listeners = new Map<string, Set<(payload: Record<string, unknown>) => void>>();
+    let isolatedWorldCreations = 0;
+    const session = {
+      on: (event: string, listener: (payload: Record<string, unknown>) => void) => {
+        const targets = listeners.get(event) ?? new Set();
+        targets.add(listener);
+        listeners.set(event, targets);
+      },
+      off: (event: string, listener: (payload: Record<string, unknown>) => void) => {
+        listeners.get(event)?.delete(listener);
+      },
+      emit: (event: string, payload: Record<string, unknown>) => {
+        for (const listener of listeners.get(event) ?? []) listener(payload);
+      },
+      send: async (method: string, params?: CdpParams) => {
+        calls.push({ method, ...(params === undefined ? {} : { params }) });
+        if (method === "Page.getFrameTree") {
+          return {
+            frameTree: {
+              frame: {
+                id: "spa-main-frame",
+                loaderId: "loader-spa",
+                url: "https://recordly.dev/app",
+                securityOrigin: "https://recordly.dev",
+              },
+            },
+          };
+        }
+        if (method === "Page.createIsolatedWorld") {
+          isolatedWorldCreations += 1;
+          return { executionContextId: 40 + isolatedWorldCreations };
+        }
+        if (
+          method === "Runtime.evaluate" &&
+          typeof params?.expression === "string" &&
+          params.expression.includes("settleWheel")
+        ) {
+          const epoch = isolatedWorldCreations;
+          session.emit("Runtime.consoleAPICalled", {
+            type: "debug",
+            args: [
+              { type: "string", value: markerForEpoch(epoch) },
+              {
+                type: "string",
+                value: JSON.stringify({
+                  kind: "ready",
+                  nonce: epoch === 1 ? NONCE_A : NONCE_B,
+                }),
+              },
+            ],
+            executionContextId: 40 + epoch,
+          });
+        }
+        return {};
+      },
+    };
+    const page = {
+      request: {
+        post: async (url: string, options?: { data?: Record<string, unknown> }) => {
+          const path = new URL(url).pathname;
+          requests.push({ path, data: options?.data ?? {} });
+          const body =
+            path === "/claim"
+              ? { ok: true, token: "runtime-only-token" }
+              : path === "/observer-challenge"
+                ? { ok: true, marker: markerForEpoch(options?.data?.["documentEpoch"]) }
+                : path === "/stop"
+                  ? { ok: true, status: "stopped" }
+                  : { ok: true, accepted: true };
+          return { ok: () => true, json: async () => body };
+        },
+      },
+      url: () => "https://recordly.dev/app",
+      waitForTimeout: () => new Promise<void>(() => undefined),
+      context: () => ({ newCDPSession: async () => session }),
+    };
+    const start = Function(`return (${browserStartHelper(input)})`)() as (
+      value: unknown,
+    ) => Promise<unknown>;
+    const stop = Function(`return (${browserStopHelper(input)})`)() as (
+      value: unknown,
+    ) => Promise<unknown>;
+
+    const starting = start(page);
+    await flushAsyncWork();
+    session.emit("Page.screencastFrame", {
+      data: Buffer.from("baseline").toString("base64"),
+      sessionId: 1,
+      metadata: { deviceWidth: 1440, deviceHeight: 900 },
+    });
+    await expect(starting).resolves.toEqual({ status: "running", observedReady: true });
+    expect(isolatedWorldCreations).toBe(1);
+
+    // SPA pushState-style navigation: same loader identity, changed URL. Do not re-arm.
+    session.emit("Page.frameNavigated", {
+      frame: {
+        id: "spa-main-frame",
+        loaderId: "loader-spa",
+        url: "https://recordly.dev/app/settings",
+        securityOrigin: "https://recordly.dev",
+      },
+    });
+    await flushAsyncWork();
+    expect(isolatedWorldCreations).toBe(1);
+    expect(requests.filter((request) => request.path === "/observer-challenge")).toHaveLength(1);
+    session.emit("Runtime.consoleAPICalled", {
+      type: "debug",
+      args: [
+        { type: "string", value: MARKER_A },
+        {
+          type: "string",
+          value: observedEnvelope(NONCE_A, {
+            type: "click",
+            data: { x: 4, y: 5, button: 0 },
+          }),
+        },
+      ],
+      executionContextId: 41,
+    });
+    await flushAsyncWork();
+    expect(requests.filter((request) => request.path === "/observed-event")).toHaveLength(1);
+
+    // Same-origin redirect / full navigation: new loader replaces the execution context.
+    session.emit("Page.frameNavigated", {
+      frame: {
+        id: "spa-main-frame",
+        loaderId: "loader-redirect",
+        url: "https://recordly.dev/app/redirected",
+        securityOrigin: "https://recordly.dev",
+      },
+    });
+    await flushAsyncWork();
+    expect(isolatedWorldCreations).toBe(2);
+    expect(requests.filter((request) => request.path === "/observer-challenge")).toHaveLength(2);
+
+    session.emit("Runtime.consoleAPICalled", {
+      type: "debug",
+      args: [
+        { type: "string", value: MARKER_A },
+        {
+          type: "string",
+          value: observedEnvelope(NONCE_A, {
+            type: "click",
+            data: { x: 6, y: 7, button: 0 },
+          }),
+        },
+      ],
+      executionContextId: 41,
+    });
+    await flushAsyncWork();
+    expect(requests.filter((request) => request.path === "/observed-event")).toHaveLength(1);
+
+    session.emit("Runtime.consoleAPICalled", {
+      type: "debug",
+      args: [
+        { type: "string", value: MARKER_B },
+        {
+          type: "string",
+          value: observedEnvelope(NONCE_B, {
+            type: "click",
+            data: { x: 8, y: 9, button: 0 },
+          }),
+        },
+      ],
+      executionContextId: 42,
+    });
+    await flushAsyncWork();
+    expect(requests.filter((request) => request.path === "/observed-event")).toHaveLength(2);
+
+    // Out-of-policy redirect must not challenge or accept events.
+    const challengesBeforeCrossOrigin = requests.filter(
+      (request) => request.path === "/observer-challenge",
+    ).length;
+    session.emit("Page.frameNavigated", {
+      frame: {
+        id: "spa-main-frame",
+        loaderId: "loader-external",
+        url: "https://evil.example/capture",
+        securityOrigin: "https://evil.example",
+      },
+    });
+    await flushAsyncWork();
+    expect(isolatedWorldCreations).toBe(2);
+    expect(requests.filter((request) => request.path === "/observer-challenge")).toHaveLength(
+      challengesBeforeCrossOrigin,
+    );
+
+    await expect(stop(page)).resolves.toMatchObject({ status: "stopped" });
   });
 });

@@ -4,6 +4,11 @@ import {
   validateRecordingProject,
 } from "../src/project/index.js";
 import { isContainedAbsoluteChild } from "../src/safe/path.js";
+import {
+  type DiagnosticCode,
+  type DiagnosticReason,
+  RecordingDiagnosticError,
+} from "./diagnostics.js";
 import type { PreviewInspection } from "./preview-inspection.js";
 import type {
   ApplyAcceptedEditorialProposalInput,
@@ -74,7 +79,7 @@ type SessionSuccess = {
 type ToolErrorOutput = {
   ok: false;
   operation: Operation;
-  error: { code: "invalid_input" | "service_unavailable" | "operation_failed" };
+  error: { code: DiagnosticCode; reason?: DiagnosticReason };
 };
 
 type ProjectOutput = {
@@ -338,13 +343,31 @@ function successfulResult(structuredContent: ToolResult["structuredContent"]): T
   };
 }
 
-function error(operation: Operation, code: ToolErrorOutput["error"]["code"]): ToolResult {
-  const structuredContent: ToolErrorOutput = { ok: false, operation, error: { code } };
+function error(
+  operation: Operation,
+  code: ToolErrorOutput["error"]["code"],
+  reason?: DiagnosticReason,
+): ToolResult {
+  const structuredContent: ToolErrorOutput = {
+    ok: false,
+    operation,
+    error: reason === undefined ? { code } : { code, reason },
+  };
   return {
     content: [{ type: "text", text: JSON.stringify(structuredContent) }],
     structuredContent,
     isError: true,
   };
+}
+
+function mapCaughtError(operation: Operation, caught: unknown): ToolResult {
+  if (caught instanceof RecordingServiceUnavailableError) {
+    return error(operation, "service_unavailable", "unsupported_state");
+  }
+  if (caught instanceof RecordingDiagnosticError) {
+    return error(operation, caught.code, caught.reason);
+  }
+  return error(operation, "operation_failed");
 }
 
 function safeProfileSummary(value: unknown): {
@@ -405,9 +428,7 @@ async function execute(
   try {
     return success(operation, await work());
   } catch (caught) {
-    if (caught instanceof RecordingServiceUnavailableError)
-      return error(operation, "service_unavailable");
-    return error(operation, "operation_failed");
+    return mapCaughtError(operation, caught);
   }
 }
 
@@ -475,7 +496,7 @@ export function createRecordingToolHandlers(service: RecordingMcpService): {
       ),
     createRecordingProject: async (input) => {
       if (service.createProject === undefined) {
-        return error("create_recording_project", "service_unavailable");
+        return error("create_recording_project", "service_unavailable", "unsupported_state");
       }
       try {
         return projectSuccess(
@@ -488,82 +509,90 @@ export function createRecordingToolHandlers(service: RecordingMcpService): {
               : { automatedRevisionLimit: input.automatedRevisionLimit }),
           }),
         );
-      } catch {
-        return error("create_recording_project", "operation_failed");
+      } catch (caught) {
+        return mapCaughtError("create_recording_project", caught);
       }
     },
     inspectRecordingProject: async (input) => {
       if (service.inspectProject === undefined) {
-        return error("inspect_recording_project", "service_unavailable");
+        return error("inspect_recording_project", "service_unavailable", "unsupported_state");
       }
       try {
         return projectSuccess("inspect_recording_project", await service.inspectProject(input));
-      } catch {
-        return error("inspect_recording_project", "operation_failed");
+      } catch (caught) {
+        return mapCaughtError("inspect_recording_project", caught);
       }
     },
     reviseRecordingProject: async (input) => {
       if (service.reviseProject === undefined) {
-        return error("revise_recording_project", "service_unavailable");
+        return error("revise_recording_project", "service_unavailable", "unsupported_state");
       }
       try {
         return projectSuccess(
           "revise_recording_project",
           await service.reviseProject({ project: input.project, mode: input.mode ?? "manual" }),
         );
-      } catch {
-        return error("revise_recording_project", "operation_failed");
+      } catch (caught) {
+        return mapCaughtError("revise_recording_project", caught);
       }
     },
     renderRecordingProjectPreview: async (input) => {
       if (service.renderProject === undefined) {
-        return error("render_recording_project_preview", "service_unavailable");
+        return error(
+          "render_recording_project_preview",
+          "service_unavailable",
+          "unsupported_state",
+        );
       }
       try {
         return projectSuccess(
           "render_recording_project_preview",
           await service.renderProject({ ...input, kind: "preview" }),
         );
-      } catch {
-        return error("render_recording_project_preview", "operation_failed");
+      } catch (caught) {
+        return mapCaughtError("render_recording_project_preview", caught);
       }
     },
     renderRecordingProjectFinal: async (input) => {
       if (service.renderProject === undefined) {
-        return error("render_recording_project_final", "service_unavailable");
+        return error("render_recording_project_final", "service_unavailable", "unsupported_state");
       }
       try {
         return projectSuccess(
           "render_recording_project_final",
           await service.renderProject({ ...input, kind: "final" }),
         );
-      } catch {
-        return error("render_recording_project_final", "operation_failed");
+      } catch (caught) {
+        return mapCaughtError("render_recording_project_final", caught);
       }
     },
     inspectRecordingProjectPreview: async (input) => {
       if (service.inspectPreview === undefined) {
-        return error("inspect_recording_project_preview", "service_unavailable");
+        return error(
+          "inspect_recording_project_preview",
+          "service_unavailable",
+          "unsupported_state",
+        );
       }
       try {
         return previewInspectionSuccess(await service.inspectPreview(input));
-      } catch {
-        return error("inspect_recording_project_preview", "operation_failed");
+      } catch (caught) {
+        return mapCaughtError("inspect_recording_project_preview", caught);
       }
     },
     judgeRecordingProjectPreview: async (input) => {
       if (service.judgePreview === undefined) {
-        return error("judge_recording_project_preview", "service_unavailable");
+        return error("judge_recording_project_preview", "service_unavailable", "unsupported_state");
       }
       try {
         return projectSuccess("judge_recording_project_preview", await service.judgePreview(input));
-      } catch {
-        return error("judge_recording_project_preview", "operation_failed");
+      } catch (caught) {
+        return mapCaughtError("judge_recording_project_preview", caught);
       }
     },
     importRecordingProjectMedia: async (input) => {
       if (service.importProjectMedia === undefined) {
-        return error("import_recording_project_media", "service_unavailable");
+        return error("import_recording_project_media", "service_unavailable", "unsupported_state");
       }
       try {
         const media = await service.importProjectMedia(input);
@@ -574,92 +603,98 @@ export function createRecordingToolHandlers(service: RecordingMcpService): {
         };
         return successfulResult(structuredContent);
       } catch (caught) {
-        if (caught instanceof RecordingServiceUnavailableError)
-          return error("import_recording_project_media", "service_unavailable");
-        return error("import_recording_project_media", "operation_failed");
+        return mapCaughtError("import_recording_project_media", caught);
       }
     },
     listRecordingProfiles: async () => {
       if (service.listProfiles === undefined)
-        return error("list_recording_profiles", "service_unavailable");
+        return error("list_recording_profiles", "service_unavailable", "unsupported_state");
       try {
         const profiles = (await service.listProfiles({})).map(safeProfileSummary);
         if (profiles.length > 35) throw new Error("service returned too many profiles");
         return profileSuccess({ ok: true, operation: "list_recording_profiles", profiles });
-      } catch {
-        return error("list_recording_profiles", "operation_failed");
+      } catch (caught) {
+        return mapCaughtError("list_recording_profiles", caught);
       }
     },
     getRecordingProfile: async (input) => {
       if (service.getProfile === undefined)
-        return error("get_recording_profile", "service_unavailable");
+        return error("get_recording_profile", "service_unavailable", "unsupported_state");
       try {
         return profileSuccess({
           ok: true,
           operation: "get_recording_profile",
           profile: validateRecordingProfileReference(await service.getProfile(input)),
         });
-      } catch {
-        return error("get_recording_profile", "operation_failed");
+      } catch (caught) {
+        return mapCaughtError("get_recording_profile", caught);
       }
     },
     createRecordingProfile: async (input) => {
       if (service.createProfile === undefined)
-        return error("create_recording_profile", "service_unavailable");
+        return error("create_recording_profile", "service_unavailable", "unsupported_state");
       try {
         return profileSuccess({
           ok: true,
           operation: "create_recording_profile",
           profile: validateRecordingProfileReference(await service.createProfile(input)),
         });
-      } catch {
-        return error("create_recording_profile", "operation_failed");
+      } catch (caught) {
+        return mapCaughtError("create_recording_profile", caught);
       }
     },
     updateRecordingProfile: async (input) => {
       if (service.updateProfile === undefined)
-        return error("update_recording_profile", "service_unavailable");
+        return error("update_recording_profile", "service_unavailable", "unsupported_state");
       try {
         return profileSuccess({
           ok: true,
           operation: "update_recording_profile",
           profile: validateRecordingProfileReference(await service.updateProfile(input)),
         });
-      } catch {
-        return error("update_recording_profile", "operation_failed");
+      } catch (caught) {
+        return mapCaughtError("update_recording_profile", caught);
       }
     },
     applyRecordingProfile: async (input) => {
       if (service.applyProfile === undefined)
-        return error("apply_recording_profile", "service_unavailable");
+        return error("apply_recording_profile", "service_unavailable", "unsupported_state");
       try {
         return projectSuccess(
           "apply_recording_profile",
           await service.applyProfile({ ...input, mode: input.mode ?? "manual" }),
         );
-      } catch {
-        return error("apply_recording_profile", "operation_failed");
+      } catch (caught) {
+        return mapCaughtError("apply_recording_profile", caught);
       }
     },
     proposeRecordingProjectEditorial: async (input) => {
       if (service.proposeEditorial === undefined)
-        return error("propose_recording_project_editorial", "service_unavailable");
+        return error(
+          "propose_recording_project_editorial",
+          "service_unavailable",
+          "unsupported_state",
+        );
       try {
         return editorialProposalSuccess(await service.proposeEditorial(input));
-      } catch {
-        return error("propose_recording_project_editorial", "operation_failed");
+      } catch (caught) {
+        return mapCaughtError("propose_recording_project_editorial", caught);
       }
     },
     applyAcceptedRecordingProjectEditorial: async (input) => {
       if (service.applyAcceptedEditorialProposal === undefined)
-        return error("apply_accepted_recording_project_editorial", "service_unavailable");
+        return error(
+          "apply_accepted_recording_project_editorial",
+          "service_unavailable",
+          "unsupported_state",
+        );
       try {
         return projectSuccess(
           "apply_accepted_recording_project_editorial",
           await service.applyAcceptedEditorialProposal(input),
         );
-      } catch {
-        return error("apply_accepted_recording_project_editorial", "operation_failed");
+      } catch (caught) {
+        return mapCaughtError("apply_accepted_recording_project_editorial", caught);
       }
     },
   };

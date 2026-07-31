@@ -5,6 +5,8 @@ import { appendFile, lstat, mkdir, open, rename, writeFile } from "node:fs/promi
 import { createServer, type IncomingMessage, type Server, type ServerResponse } from "node:http";
 import { join } from "node:path";
 
+import { createCaptureMailbox } from "./capture-mailbox.js";
+
 // A 1440×900 RGB source is 3.9 MiB before JPEG compression; 8 MiB permits a
 // high-quality base64 payload while bounding a single hostile request.
 const MAX_BODY_BYTES = 8 * 1024 * 1024;
@@ -46,6 +48,12 @@ type BrokerInput = {
   maxCaptureSeconds?: number;
   maxAcceptedFrames?: number;
   maxAcceptedBytes?: number;
+  /** Test-only: override the in-flight durable-write queue capacity. */
+  queueCapacity?: number;
+  /** Test-only: await before each durable frame write completes. */
+  beforeFramePersist?: () => Promise<void>;
+  /** Test-only: observe queue occupancy after a frame is admitted. */
+  onFrameAdmit?: (pendingWrites: number) => void;
   onPhase: (
     phase: "ready" | "claimed" | "running" | "stopped" | "failed",
     status: CaptureBrokerStatus,
@@ -87,9 +95,26 @@ export type BrokerObservedEvent = {
 
 export type CaptureBroker = {
   endpoint: string;
+  mailboxRoot: string;
   status(): CaptureBrokerStatus;
   close(): Promise<void>;
 };
+
+export type CaptureBrokerFailureReason =
+  | "backpressure"
+  | "broker_interrupted"
+  | "budget_exceeded"
+  | "browser_start_failed"
+  | "durable_write_failed"
+  | "incomplete_capture"
+  | "invalid_broker_clock"
+  | "malformed_frame"
+  | "malformed_observed_event"
+  | "observed_event_before_baseline"
+  | "observed_event_delivery_failed"
+  | "observed_event_flood"
+  | "observed_event_persist_failed"
+  | "observer_challenge_cap";
 
 export type CaptureBrokerStatus = {
   phase: "ready" | "claimed" | "running" | "stopped" | "failed";
@@ -98,7 +123,7 @@ export type CaptureBrokerStatus = {
   maxAcceptedBytes: number;
   acceptedFrames: number;
   acceptedBytes: number;
-  reason?: "budget_exceeded";
+  reason?: CaptureBrokerFailureReason;
 };
 
 function boundedBudget(value: number | undefined, fallback: number, maximum: number): number {
@@ -268,6 +293,9 @@ export async function createCaptureBroker(input: BrokerInput): Promise<CaptureBr
   await mkdir(join(input.root, "frames", "raw"), { recursive: true, mode: 0o700 });
   const observedEventsPath = await ensureObservedEventsFile(input.root);
   const clockUs = input.clockUs ?? (() => Number(process.hrtime.bigint() / 1_000n));
+  const queueCapacity = boundedBudget(input.queueCapacity, QUEUE_CAPACITY, QUEUE_CAPACITY);
+  const beforeFramePersist = input.beforeFramePersist;
+  const onFrameAdmit = input.onFrameAdmit;
   const budget = {
     maxCaptureSeconds: boundedBudget(
       input.maxCaptureSeconds,
@@ -293,6 +321,7 @@ export async function createCaptureBroker(input: BrokerInput): Promise<CaptureBr
   let phase: "ready" | "claimed" | "running" | "stopped" | "failed" = "ready";
   let capability: string | undefined;
   let pendingWrites = 0;
+  let inflightBytes = 0;
   let persistenceTail = Promise.resolve();
   let frameProcessingTail = Promise.resolve();
   let frameId = 0;
@@ -323,7 +352,7 @@ export async function createCaptureBroker(input: BrokerInput): Promise<CaptureBr
     ...budget,
     acceptedFrames: observed.acceptedFrames,
     acceptedBytes,
-    ...(failureReason === "budget_exceeded" ? { reason: failureReason } : {}),
+    ...(failureReason === undefined ? {} : { reason: failureReason as CaptureBrokerFailureReason }),
   });
   const setPhase = async (next: typeof phase, reason?: string): Promise<void> => {
     phase = next;
@@ -422,11 +451,18 @@ export async function createCaptureBroker(input: BrokerInput): Promise<CaptureBr
     await writeFile(temporary, `${JSON.stringify(summary)}\n`, { mode: 0o600, flag: "wx" });
     await rename(temporary, join(input.root, "capture-summary.json"));
   };
-  const failBudget = async (): Promise<void> => {
+  const failCapture = async (
+    reason: CaptureBrokerFailureReason,
+    options: { awaitPersistence?: boolean } = {},
+  ): Promise<void> => {
     if (phase === "claimed" || phase === "running") {
-      await setPhase("failed", "budget_exceeded");
+      await setPhase("failed", reason);
     }
+    if (options.awaitPersistence === true) await persistenceTail;
     await writeSummary(observed);
+  };
+  const failBudget = async (): Promise<void> => {
+    await failCapture("budget_exceeded", { awaitPersistence: true });
   };
   const server: Server = createServer(async (request, response) => {
     if (
@@ -636,11 +672,12 @@ export async function createCaptureBroker(input: BrokerInput): Promise<CaptureBr
     }
     if (request.url === "/frame") {
       const releaseFrameProcessing = await enterFrameProcessing();
+      let persisted: Promise<boolean> | undefined;
       try {
         observed.receivedFrames += 1;
-        if ((phase !== "claimed" && phase !== "running") || pendingWrites >= QUEUE_CAPACITY) {
+        if ((phase !== "claimed" && phase !== "running") || pendingWrites >= queueCapacity) {
           observed.rejectedFrames += 1;
-          if (phase === "claimed" || phase === "running") await setPhase("failed", "backpressure");
+          if (phase === "claimed" || phase === "running") await failCapture("backpressure");
           json(response, 429, { ok: false });
           return;
         }
@@ -665,8 +702,8 @@ export async function createCaptureBroker(input: BrokerInput): Promise<CaptureBr
         }
         const bytes = Buffer.from(encoded, "base64");
         if (
-          observed.acceptedFrames >= budget.maxAcceptedFrames ||
-          acceptedBytes + bytes.byteLength > budget.maxAcceptedBytes ||
+          observed.acceptedFrames + pendingWrites >= budget.maxAcceptedFrames ||
+          acceptedBytes + inflightBytes + bytes.byteLength > budget.maxAcceptedBytes ||
           (captureStartedReceiptUs !== undefined &&
             receiptAtUs !== undefined &&
             receiptAtUs - captureStartedReceiptUs > budget.maxCaptureSeconds * 1_000_000)
@@ -676,10 +713,8 @@ export async function createCaptureBroker(input: BrokerInput): Promise<CaptureBr
           json(response, 429, { ok: false });
           return;
         }
-        pendingWrites += 1;
         const receiptTimestampUs = receiptAtUs;
         if (receiptTimestampUs === undefined) {
-          pendingWrites -= 1;
           await setPhase("failed", "invalid_broker_clock");
           json(response, 500, { ok: false });
           return;
@@ -688,15 +723,18 @@ export async function createCaptureBroker(input: BrokerInput): Promise<CaptureBr
           await flushPendingScroll();
           await flushPendingPointer();
         } catch {
-          pendingWrites -= 1;
           if (!captureFailed()) await setPhase("failed", "observed_event_persist_failed");
           json(response, 500, { ok: false });
           return;
         }
+        pendingWrites += 1;
+        inflightBytes += bytes.byteLength;
+        onFrameAdmit?.(pendingWrites);
         const persist = persistenceTail.then(async () => {
           if (phase !== "claimed" && phase !== "running") {
             throw new Error("capture_not_running");
           }
+          if (beforeFramePersist !== undefined) await beforeFramePersist();
           frameId += 1;
           const receiptOffsetUs =
             firstAcceptedReceiptUs === undefined
@@ -718,31 +756,35 @@ export async function createCaptureBroker(input: BrokerInput): Promise<CaptureBr
           observed.acceptedFrames += 1;
           acceptedBytes += bytes.byteLength;
           if (phase === "claimed") await setPhase("running");
-          const degrade = pendingWrites / QUEUE_CAPACITY > DEGRADE_OCCUPANCY;
+          const degrade = pendingWrites / queueCapacity > DEGRADE_OCCUPANCY;
           observed.degradationRequested ||= degrade;
           return degrade;
         });
-        const persisted = persist.catch(async (error: unknown) => {
-          if (phase !== "failed") await setPhase("failed", "durable_write_failed");
-          throw error;
-        });
+        persisted = persist
+          .catch(async (error: unknown) => {
+            if (phase !== "failed") await setPhase("failed", "durable_write_failed");
+            throw error;
+          })
+          .finally(() => {
+            pendingWrites -= 1;
+            inflightBytes -= bytes.byteLength;
+          });
         persistenceTail = persisted.then(
           () => undefined,
           () => undefined,
         );
-        try {
-          const degrade = await persisted;
-          json(response, 200, { ok: true, degrade });
-        } catch {
-          observed.rejectedFrames += 1;
-          json(response, 500, { ok: false });
-        } finally {
-          pendingWrites -= 1;
-        }
-        return;
       } finally {
         releaseFrameProcessing();
       }
+      if (persisted === undefined) return;
+      try {
+        const degrade = await persisted;
+        json(response, 200, { ok: true, degrade });
+      } catch {
+        observed.rejectedFrames += 1;
+        json(response, 500, { ok: false });
+      }
+      return;
     }
     if (request.url === "/stop") {
       await frameProcessingTail;
@@ -803,13 +845,23 @@ export async function createCaptureBroker(input: BrokerInput): Promise<CaptureBr
   const address = server.address();
   if (address === null || typeof address === "string")
     throw new Error("capture broker address unavailable");
+  const endpoint = `http://127.0.0.1:${address.port}`;
+  const mailbox = await createCaptureMailbox({
+    root: join(input.root, ".capture-mailbox"),
+    endpoint,
+  });
+  let closed = false;
   return {
-    endpoint: `http://127.0.0.1:${address.port}`,
+    endpoint,
+    mailboxRoot: mailbox.root,
     status,
     close: async () => {
+      if (closed) return;
+      closed = true;
       if (phase === "claimed" || phase === "running") {
-        await setPhase("failed", "broker_interrupted");
+        await failCapture("broker_interrupted", { awaitPersistence: true });
       }
+      await mailbox.close();
       await new Promise<void>((resolveClose, rejectClose) =>
         server.close((error) => (error === undefined ? resolveClose() : rejectClose(error))),
       );

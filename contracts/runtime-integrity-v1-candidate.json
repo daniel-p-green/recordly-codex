@@ -1,0 +1,16 @@
+{
+  "schemaVersion": 1,
+  "candidateVersion": "1.0.0",
+  "pluginVersion": "1.0.0",
+  "bundle": {
+    "path": "plugin-runtime/recordly-codex-mcp.mjs",
+    "bytes": 1291443,
+    "sha256": "35e6348dff874f5e1f8d2df0ff54486ab6ad338dc9dc53e99eadf027329c8ae9",
+    "maximumBytes": 2097152
+  },
+  "mcp": {
+    "serverName": "recordly-codex-mcp-server",
+    "protocolVersion": "2025-03-26",
+    "toolCount": 20
+  }
+}

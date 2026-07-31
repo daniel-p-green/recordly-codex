@@ -10,7 +10,7 @@ import {
   unlink,
   writeFile,
 } from "node:fs/promises";
-import { isAbsolute, join, relative, resolve } from "node:path";
+import { isAbsolute, join, resolve } from "node:path";
 import { isContainedPath } from "../src/safe/path.js";
 
 const DIRECTORY_MODE = 0o700;

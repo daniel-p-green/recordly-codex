@@ -12,7 +12,7 @@ import {
   unlink,
   writeFile,
 } from "node:fs/promises";
-import { isAbsolute, join, relative, resolve } from "node:path";
+import { isAbsolute, join, resolve } from "node:path";
 import { canonicalJson } from "../src/manifest/index.js";
 
 import type { RecordingProject } from "../src/project/index.js";
