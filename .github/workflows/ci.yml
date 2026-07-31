@@ -54,7 +54,7 @@ jobs:
 
       - name: Upload failure diagnostics
         if: ${{ failure() }}
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: quality-diagnostics-node-${{ matrix.node }}
           path: |
@@ -103,7 +103,7 @@ jobs:
 
       - name: Upload failure diagnostics
         if: ${{ failure() }}
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: plugin-diagnostics
           path: |
