@@ -13,7 +13,5 @@ export type V1AcceptancePartialSummary = {
   complete: false;
 };
 
-export function validateV1AcceptancePartialLedger(
-  value: unknown,
-): V1AcceptancePartialSummary;
+export function validateV1AcceptancePartialLedger(value: unknown): V1AcceptancePartialSummary;
 export function validateV1AcceptanceLedger(value: unknown): V1AcceptanceSummary;

@@ -223,11 +223,7 @@ function parseV1AcceptanceLedger(value, requiredRunCount) {
   literal(ledger.kind, "recordly-codex-v1-live-acceptance", "ledger.kind");
   literal(ledger.candidateVersion, "1.0.0", "ledger.candidateVersion");
   const bundleSha256 = digest(ledger.bundleSha256, "ledger.bundleSha256");
-  if (
-    !Array.isArray(ledger.runs) ||
-    ledger.runs.length < 1 ||
-    ledger.runs.length > 12
-  ) {
+  if (!Array.isArray(ledger.runs) || ledger.runs.length < 1 || ledger.runs.length > 12) {
     fail("ledger.runs must contain between 1 and 12 runs");
   }
   if (requiredRunCount !== undefined && ledger.runs.length !== requiredRunCount) {
