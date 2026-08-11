@@ -44,7 +44,7 @@
     "typecheck": "tsc --noEmit"
   },
   "devDependencies": {
-    "@biomejs/biome": "2.5.6",
+    "@biomejs/biome": "2.5.7",
     "@types/node": "^22.0.0",
     "@vitest/coverage-v8": "^4.0.0",
     "esbuild": "0.28.1",
